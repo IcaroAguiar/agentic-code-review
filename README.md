@@ -15,14 +15,21 @@ agentic-code-review/
       SKILL.md
       scripts/
         collect-review-context.mjs
+        calibrate-review-history.mjs
         smoke-review-toolbelt.mjs
         lib/
           external-toolbelt.mjs
           gate-categories.mjs
       templates/
         qa-evidence.md
+        agentic-reviewrc.example.json
+        agentic-reviewrc.schema.json
+        github-action-agentic-code-review.yml
         deep-review-toolbelt-2026.json
         calibration-2026-04-28.md
+        contract-compatibility-test.vitest.ts
+        security-boundary-test.vitest.ts
+        performance-budget-test.vitest.ts
         n-plus-one-query-test.vitest.ts
         concurrency-test.vitest.ts
         idempotency-test.vitest.ts
@@ -132,6 +139,7 @@ Examples:
 ```bash
 npx agentic-code-review collect
 npx agentic-code-review collect --base origin/main
+npx agentic-code-review collect --base origin/main --json
 npx agentic-code-review collect --root ../api --root ../web
 npx agentic-code-review collect --base <base-sha> --head <head-sha>
 ```
@@ -149,6 +157,39 @@ This command prints a review packet with:
 
 The collector intentionally reports signals, not proof. A finding should be verified against the actual code before becoming a final review comment.
 
+Important options:
+
+- `--json`: emits a structured packet for CI, dashboards, or calibration.
+- `--config <file>`: uses an explicit config file instead of auto-discovering `.agentic-reviewrc.json`.
+- `--run-external-tools`: runs installed optional scanners.
+- `--allow-tool-downloads`: permits `npx` or `uvx` fallback tools. This is opt-in.
+- `--external-tool <name>`: limits optional scanning to one or more named tools.
+- `--external-tool-timeout-ms <ms>`: controls timeout for optional tools.
+
+### `.agentic-reviewrc.json`
+
+Projects can tune the deterministic packet without forking the skill. Copy `skills/agentic-code-review/templates/agentic-reviewrc.example.json` to `.agentic-reviewrc.json`.
+
+Supported fields:
+
+- `rules`: enable or disable specific rule ids.
+- `severities`: override rule severity to `low`, `medium`, or `high`.
+- `thresholds`: tune file size, function length, import count, refactor, and constructor-width thresholds.
+- `ignorePaths`: ignore generated or project-specific paths using simple glob-like patterns.
+- `customQuestions`: add project/business checkpoints to every packet.
+- `externalToolTimeoutMs`: set the default optional tool timeout for that repository.
+
+### `agentic-code-review calibrate`
+
+Runs the collector against historical commit ranges and produces a report for comparing the packet against human reviews or known post-merge bugs.
+
+```bash
+npx agentic-code-review calibrate --repo . --case pr-101:<base-sha>:<head-sha>
+npx agentic-code-review calibrate --repo . --cases-file calibration-cases.json --json
+```
+
+Use calibration to tune false positives, false negatives, and severity mismatches before changing generic rules.
+
 ### `agentic-code-review smoke`
 
 Runs the fixture smoke suite for the skill and scripts:
@@ -158,6 +199,8 @@ npx agentic-code-review smoke
 ```
 
 The smoke suite creates temporary Git repositories under `/private/tmp/agentic-code-review-smoke` and verifies scanner behavior for core cases such as SQL injection, N+1, unbounded list queries, patch semantics, public contract leaks, UI token validation, large-file signals, cross-repo contracts, historical `--base/--head` ranges, and optional tool selection.
+
+It also validates JSON output, project config behavior, and generic web/runtime security signals such as unsafe HTML sinks, command injection, path traversal, and sensitive-data logging.
 
 ## The Skill
 

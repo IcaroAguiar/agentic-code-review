@@ -39,6 +39,14 @@ Skip only for trivial non-code edits, formatting-only changes, or factual answer
    ```bash
    node ~/.agents/skills/agentic-code-review/scripts/collect-review-context.mjs --base <base-sha> --head <head-sha>
    ```
+   For CI, dashboards, calibration, or machine-readable packets:
+   ```bash
+   node ~/.agents/skills/agentic-code-review/scripts/collect-review-context.mjs --base origin/main --json
+   ```
+   For project-specific tuning, keep `.agentic-reviewrc.json` at the repository root or pass an explicit config:
+   ```bash
+   node ~/.agents/skills/agentic-code-review/scripts/collect-review-context.mjs --config .agentic-reviewrc.json
+   ```
    To inventory optional mature CLIs without running them:
    ```bash
    node ~/.agents/skills/agentic-code-review/scripts/collect-review-context.mjs
@@ -91,6 +99,7 @@ Prioritize:
 - authorization, tenant/org scoping, privacy, and sensitive-data handling;
 - data consistency, race conditions, duplicate writes, idempotency, and transaction boundaries;
 - raw SQL, unsafe query APIs, interpolated SQL, and SQL injection risk;
+- unsafe HTML rendering, command execution with dynamic input, path traversal, sensitive-data logging, and other web/runtime security sinks;
 - N+1 query patterns and per-item async calls that break at scale;
 - unbounded list/query access without an obvious limit, pagination, cursor, or batch boundary;
 - public/API response integrity: never expose raw domain, persistence, legacy, private, or internal state directly; public compatibility aliases must be sanitized subsets, while full contracts should live behind explicit public DTOs/resources;
@@ -114,6 +123,7 @@ The collector is intentionally repository- and language-agnostic. It supports mu
 It checks for signals, not final proof:
 - N+1 and per-item query patterns in common ORMs/query clients;
 - raw SQL and interpolated SQL injection risk;
+- unsafe HTML/XSS sinks, dynamic shell command execution, user-controlled filesystem paths, and sensitive-data logging;
 - unbounded list/query access that lacks an obvious limit, pagination, cursor, or batch boundary;
 - public/API contract mappers that expose raw/internal/legacy/domain fields without a sanitizer, redaction, DTO/resource adapter, allowlist, or public type;
 - public response/resource/DTO types that reuse broad internal/domain/persistence types instead of sanitized public types;
@@ -159,8 +169,22 @@ Optional external toolbelt:
 - `lizard` for complexity;
 - `dependency-cruiser` or `madge` for JS/TS dependency cycles;
 - `osv-scanner` for dependency vulnerabilities when manifests/lockfiles change.
+- Python: `bandit` and `pip-audit`;
+- Go: `gosec` and `govulncheck`;
+- Ruby: `brakeman` and `bundler-audit`;
+- Docker/IaC: `trivy` and `checkov`.
 
 These tools are additive evidence. Missing tools do not block by themselves; findings from installed tools must still be verified against the code. The collector may show `downloadable-disabled` when `npx` or `uvx` can fetch a tool, but it must not download or execute those fallbacks unless `--allow-tool-downloads` is passed intentionally. External tools are run one process at a time with a timeout and can be isolated with `--external-tool <name>` when a tool is slow, noisy, or network-dependent. Use `--external-tool-timeout-ms` to keep deep review deterministic on slow networks.
+
+Project config:
+- Use `.agentic-reviewrc.json` to disable noisy rules, override severity, tune thresholds, ignore generated paths, add business-specific questions, and set external tool timeouts.
+- Prefer config tuning over weakening generic rules when one repository has special conventions.
+- Keep config small and explicit; do not use it to hide real risk.
+
+Calibration:
+- Use `agentic-code-review calibrate --repo <path> --case <name>:<base>:<head>` to run historical PR/commit windows.
+- Compare packets against human review notes and known post-merge bugs.
+- Record false positives, false negatives, and severity mismatches before changing the skill.
 
 Scanner output must be verified against the real code before becoming a review finding. For concurrency, N+1, unbounded queries, idempotency, rollback, and regression claims, prefer repo-native tests or probes that instrument the real production path and fail when the risk is present.
 

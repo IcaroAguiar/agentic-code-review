@@ -14,7 +14,8 @@
   ],
   "scripts": {
     "smoke": "node skills/agentic-code-review/scripts/smoke-review-toolbelt.mjs",
-    "collect": "node skills/agentic-code-review/scripts/collect-review-context.mjs"
+    "collect": "node skills/agentic-code-review/scripts/collect-review-context.mjs",
+    "calibrate": "node skills/agentic-code-review/scripts/calibrate-review-history.mjs"
   },
   "keywords": [
     "ai",

@@ -1,0 +1,29 @@
+name: Agentic Code Review
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  review-packet:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Generate review packet
+        run: node skills/agentic-code-review/scripts/collect-review-context.mjs --base origin/${{ github.base_ref || 'main' }} --json > agentic-code-review-packet.json
+
+      - name: Upload review packet
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentic-code-review-packet
+          path: agentic-code-review-packet.json

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agentic Code Review Config",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "rules": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" }
+    },
+    "severities": {
+      "type": "object",
+      "additionalProperties": { "enum": ["low", "medium", "high"] }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": { "type": "number" }
+    },
+    "ignorePaths": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "customQuestions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "externalToolTimeoutMs": {
+      "type": "number",
+      "minimum": 1000
+    }
+  }
+}

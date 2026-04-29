@@ -13,13 +13,16 @@ function usage() {
 Usage:
   agentic-code-review install [--target agents|codex] [--dest <dir>] [--force]
   agentic-code-review collect [collector args...]
+  agentic-code-review calibrate [calibration args...]
   agentic-code-review smoke
   agentic-code-review help
 
 Examples:
   npx agentic-code-review install
   npx agentic-code-review collect --base origin/main
+  npx agentic-code-review collect --base origin/main --json
   npx agentic-code-review collect --root ../api --root ../web
+  npx agentic-code-review calibrate --repo . --case pr-101:abc123:def456
   npx agentic-code-review smoke
 `);
 }
@@ -110,6 +113,10 @@ function main() {
     }
     if (command === "collect") {
       runNodeScript(join(skillSource, "scripts", "collect-review-context.mjs"), args);
+      return;
+    }
+    if (command === "calibrate") {
+      runNodeScript(join(skillSource, "scripts", "calibrate-review-history.mjs"), args);
       return;
     }
     if (command === "smoke") {

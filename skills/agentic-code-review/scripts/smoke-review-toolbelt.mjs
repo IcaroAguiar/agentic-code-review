@@ -101,6 +101,36 @@ func LoadUsers(db DB, ids []int) []string {
     },
   },
   {
+    name: "web-runtime-security",
+    files: {
+      "src/render.ts": `import { exec } from "node:child_process";
+import { readFileSync } from "node:fs";
+
+export function renderHtml(element: HTMLElement, html: string) {
+  element.innerHTML = html;
+}
+
+export function runReport(input: string) {
+  exec("node scripts/report.js " + input);
+}
+
+export function readUserFile(req: { query: { path: string } }) {
+  return readFileSync(req.query.path, "utf8");
+}
+
+export function logToken(token: string) {
+  console.warn("accessToken", token);
+}
+`,
+    },
+    assert(output) {
+      expectIncludes(this.name, output, "potential-xss-unsanitized-html");
+      expectIncludes(this.name, output, "command-injection-risk");
+      expectIncludes(this.name, output, "path-traversal-risk");
+      expectIncludes(this.name, output, "sensitive-data-logging-risk");
+    },
+  },
+  {
     name: "artifact-checkpoint",
     files: {
       ".playwright-cli/session.json": `{"status":"local"}`,
@@ -568,6 +598,40 @@ expectIncludes("external-tool-selection", selectedToolOutput, "jscpd");
 expectNotIncludes("external-tool-selection", selectedToolOutput, "madge");
 console.log("PASS external-tool-selection");
 
+const jsonOutput = collect(historicalRepo, ["--base", historicalBase, "--head", historicalHead, "--json"]);
+const jsonPacket = JSON.parse(jsonOutput);
+if (jsonPacket.status !== "ok" || jsonPacket.crossRepoSummary.findings < 1 || !Array.isArray(jsonPacket.repositories)) {
+  throw new Error("json-output: expected structured ok packet with findings and repositories");
+}
+console.log("PASS json-output");
+
+const configuredRepo = createRepo("configured-rules", {
+  ".agentic-reviewrc.json": `{
+  "rules": { "magic-string": false },
+  "customQuestions": ["Custom checkpoint?"],
+  "ignorePaths": ["ignored/**"]
+}
+`,
+  "src/status.ts": `export function approve(status: string) {
+  if (status === "APPROVED") return "APPROVED";
+  return "PENDING";
+}
+`,
+  "ignored/debug.ts": `console.warn("should be ignored");`,
+});
+const configuredOutput = collect(configuredRepo);
+expectNotIncludes("configured-rules", configuredOutput, "] magic-string at");
+expectNotIncludes("configured-rules", configuredOutput, "ignored/debug.ts");
+expectIncludes("configured-rules", configuredOutput, "Custom checkpoint?");
+console.log("PASS configured-rules");
+
+const calibrationOutput = run("node", [join(scriptDir, "calibrate-review-history.mjs"), "--repo", historicalRepo, "--case", `historical:${historicalBase}:${historicalHead}`, "--json"], historicalRepo);
+const calibrationPacket = JSON.parse(calibrationOutput);
+if (calibrationPacket.cases?.[0]?.status !== "ok") {
+  throw new Error("calibration-cli: expected ok calibration case");
+}
+console.log("PASS calibration-cli");
+
 const skillText = readFileSync(join(scriptDir, "..", "SKILL.md"), "utf8");
 const qaEvidenceText = readFileSync(join(scriptDir, "..", "templates", "qa-evidence.md"), "utf8");
 expectIncludes("deterministic-is-not-gate", skillText, "The deterministic collector is tool support for the reviewer. It is not the gate by itself.");
@@ -581,6 +645,9 @@ expectIncludes("definition-of-done-checklist", skillText, "One independent revie
 expectIncludes("definition-of-done-checklist", skillText, "Skipped checks include exact reason and residual risk.");
 expectIncludes("reviewer-noisy-packet-triage", skillText, "When deterministic output is noisy, prioritize semantic and behavioral issues over style/context signals.");
 expectIncludes("reviewer-noisy-packet-triage", skillText, "otherwise keep them in checkpoints or `Pontos de atenção adicionais`.");
+expectIncludes("json-config-calibration", skillText, "--json");
+expectIncludes("json-config-calibration", skillText, ".agentic-reviewrc.json");
+expectIncludes("json-config-calibration", skillText, "agentic-code-review calibrate");
 expectIncludes("browser-use-first-for-web-qa", skillText, "Web UI/browser changes, with the main agent using browser-use first");
 expectIncludes("authenticated-smoke-credentials", skillText, "do not accept \"login failed\" or \"stopped at login\" as sufficient evidence");
 expectIncludes("authenticated-smoke-credentials", skillText, "For `staging` or `prod`, it must not create credentials");
@@ -589,4 +656,4 @@ expectIncludes("authenticated-smoke-credentials", qaEvidenceText, "Credential cr
 expectNotIncludes("no-local-user-paths", skillText, "/Users/");
 console.log("PASS public-skill-contract");
 
-console.log(`PASS ${cases.length + 4}/${cases.length + 4} agentic-code-review smoke cases`);
+console.log(`PASS ${cases.length + 7}/${cases.length + 7} agentic-code-review smoke cases`);

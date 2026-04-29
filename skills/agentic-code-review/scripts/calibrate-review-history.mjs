@@ -1,0 +1,178 @@
+#!/usr/bin/env node
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const collector = join(scriptDir, "collect-review-context.mjs");
+
+function usage() {
+  console.log(`agentic-code-review calibrate
+
+Usage:
+  agentic-code-review calibrate --repo <path> --case <name>:<base>:<head> [--case ...] [--json] [--out <file>]
+  agentic-code-review calibrate --repo <path> --cases-file <json> [--json] [--out <file>]
+
+cases-file shape:
+  [
+    { "name": "pr-101", "base": "abc123", "head": "def456", "expected": ["n-plus-one", "magic-string"] }
+  ]
+`);
+}
+
+function parseArgs(argv) {
+  const cases = [];
+  let repo = "";
+  let casesFile = "";
+  let json = false;
+  let out = "";
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--help" || arg === "-h") {
+      usage();
+      process.exit(0);
+    } else if (arg === "--repo" || arg === "--root") {
+      repo = resolve(argv[index + 1] || "");
+      index += 1;
+    } else if (arg.startsWith("--repo=") || arg.startsWith("--root=")) {
+      repo = resolve(arg.split("=").slice(1).join("="));
+    } else if (arg === "--case") {
+      cases.push(argv[index + 1] || "");
+      index += 1;
+    } else if (arg.startsWith("--case=")) {
+      cases.push(arg.split("=").slice(1).join("="));
+    } else if (arg === "--cases-file") {
+      casesFile = resolve(argv[index + 1] || "");
+      index += 1;
+    } else if (arg.startsWith("--cases-file=")) {
+      casesFile = resolve(arg.split("=").slice(1).join("="));
+    } else if (arg === "--json") {
+      json = true;
+    } else if (arg === "--out") {
+      out = resolve(argv[index + 1] || "");
+      index += 1;
+    } else if (arg.startsWith("--out=")) {
+      out = resolve(arg.split("=").slice(1).join("="));
+    }
+  }
+
+  return { repo, cases, casesFile, json, out };
+}
+
+function run(command, args, cwd) {
+  try {
+    return {
+      ok: true,
+      stdout: execFileSync(command, args, {
+        cwd,
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024 * 48,
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      stdout: error.stdout?.toString?.() || "",
+      stderr: error.stderr?.toString?.() || error.message,
+    };
+  }
+}
+
+function parseCase(value) {
+  const [name, base, head] = String(value || "").split(":");
+  if (!name || !base || !head) throw new Error(`Invalid --case ${value}. Expected name:base:head.`);
+  return { name, base, head, expected: [] };
+}
+
+function loadCases(args) {
+  const inlineCases = args.cases.map(parseCase);
+  if (!args.casesFile) return inlineCases;
+  const fileCases = JSON.parse(readFileSync(args.casesFile, "utf8"));
+  if (!Array.isArray(fileCases)) throw new Error("--cases-file must contain a JSON array.");
+  return [...inlineCases, ...fileCases];
+}
+
+function summarizePacket(packet) {
+  return {
+    repositories: packet.crossRepoSummary?.repositoriesWithChanges || 0,
+    findings: packet.crossRepoSummary?.findings || 0,
+    high: packet.crossRepoSummary?.high || 0,
+    medium: packet.crossRepoSummary?.medium || 0,
+    low: packet.crossRepoSummary?.low || 0,
+    rules: [...new Set((packet.repositories || []).flatMap((repo) => (repo.findings || []).map((finding) => finding.rule)))].sort(),
+  };
+}
+
+function renderMarkdown(report) {
+  const lines = ["# Agentic Code Review Calibration", ""];
+  lines.push(`Repository: ${report.repository}`);
+  lines.push(`Cases: ${report.cases.length}`);
+  lines.push("");
+  for (const entry of report.cases) {
+    lines.push(`## ${entry.name}`);
+    lines.push(`Range: ${entry.base}...${entry.head}`);
+    lines.push(`Status: ${entry.status}`);
+    if (entry.error) lines.push(`Error: ${entry.error.replace(/\s+/g, " ").slice(0, 500)}`);
+    if (entry.summary) {
+      lines.push(`Findings: ${entry.summary.findings} (high: ${entry.summary.high}, medium: ${entry.summary.medium}, low: ${entry.summary.low})`);
+      lines.push(`Rules: ${entry.summary.rules.length ? entry.summary.rules.join(", ") : "none"}`);
+    }
+    if (entry.expected?.length) lines.push(`Expected comparison labels: ${entry.expected.join(", ")}`);
+    lines.push("");
+  }
+  lines.push("## Calibration Notes");
+  lines.push("- Compare each packet against human review notes or known post-merge bugs.");
+  lines.push("- Mark false positives, false negatives, and severity mismatches in the cases file.");
+  lines.push("- Tune `.agentic-reviewrc.json` thresholds/severities before changing generic rules.");
+  lines.push("");
+  return lines.join("\n");
+}
+
+const args = parseArgs(process.argv.slice(2));
+if (!args.repo || !existsSync(args.repo)) {
+  usage();
+  process.exit(2);
+}
+
+const cases = loadCases(args);
+if (cases.length === 0) {
+  usage();
+  process.exit(2);
+}
+
+const report = {
+  repository: args.repo,
+  generatedAt: new Date().toISOString(),
+  cases: cases.map((testCase) => {
+    const result = run(process.execPath, [collector, "--root", args.repo, "--base", testCase.base, "--head", testCase.head, "--json"], args.repo);
+    if (!result.ok) {
+      return {
+        ...testCase,
+        status: "collector-failed",
+        error: result.stderr || result.stdout,
+      };
+    }
+    try {
+      const packet = JSON.parse(result.stdout);
+      return {
+        ...testCase,
+        status: "ok",
+        summary: summarizePacket(packet),
+        packet,
+      };
+    } catch (error) {
+      return {
+        ...testCase,
+        status: "invalid-json",
+        error: error.message,
+      };
+    }
+  }),
+};
+
+const output = args.json ? JSON.stringify(report, null, 2) : renderMarkdown(report);
+if (args.out) writeFileSync(args.out, output);
+else console.log(output);

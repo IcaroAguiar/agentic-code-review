@@ -1,5 +1,5 @@
 {
-  "referenceDate": "2026-04-28",
+  "referenceDate": "2026-04-29",
   "policy": {
     "requiredByDefault": false,
     "downloadExecution": "opt-in only with --allow-tool-downloads",
@@ -63,6 +63,73 @@
       "preferredInstall": "brew install osv-scanner",
       "collectorName": "osv-scanner",
       "source": "https://github.com/google/osv-scanner/releases"
+    },
+    {
+      "name": "bandit",
+      "recommendedVersion": "latest stable",
+      "purpose": "Python security scanning",
+      "preferredInstall": "uv tool install bandit",
+      "fallbackInstall": "pipx install bandit",
+      "collectorName": "bandit",
+      "source": "https://pypi.org/project/bandit/"
+    },
+    {
+      "name": "pip-audit",
+      "recommendedVersion": "latest stable",
+      "purpose": "Python dependency vulnerability scanning",
+      "preferredInstall": "uv tool install pip-audit",
+      "fallbackInstall": "pipx install pip-audit",
+      "collectorName": "pip-audit",
+      "source": "https://pypi.org/project/pip-audit/"
+    },
+    {
+      "name": "gosec",
+      "recommendedVersion": "latest stable",
+      "purpose": "Go security scanning",
+      "preferredInstall": "go install github.com/securego/gosec/v2/cmd/gosec@latest",
+      "collectorName": "gosec",
+      "source": "https://github.com/securego/gosec"
+    },
+    {
+      "name": "govulncheck",
+      "recommendedVersion": "latest stable",
+      "purpose": "Go vulnerability scanning",
+      "preferredInstall": "go install golang.org/x/vuln/cmd/govulncheck@latest",
+      "collectorName": "govulncheck",
+      "source": "https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck"
+    },
+    {
+      "name": "brakeman",
+      "recommendedVersion": "latest stable",
+      "purpose": "Ruby on Rails security scanning",
+      "preferredInstall": "gem install brakeman",
+      "collectorName": "brakeman",
+      "source": "https://brakemanscanner.org/"
+    },
+    {
+      "name": "bundler-audit",
+      "recommendedVersion": "latest stable",
+      "purpose": "Ruby dependency vulnerability scanning",
+      "preferredInstall": "gem install bundler-audit",
+      "collectorName": "bundler-audit",
+      "source": "https://github.com/rubysec/bundler-audit"
+    },
+    {
+      "name": "trivy",
+      "recommendedVersion": "latest stable",
+      "purpose": "container and IaC misconfiguration scanning",
+      "preferredInstall": "brew install trivy",
+      "collectorName": "trivy",
+      "source": "https://github.com/aquasecurity/trivy"
+    },
+    {
+      "name": "checkov",
+      "recommendedVersion": "latest stable",
+      "purpose": "Infrastructure-as-code security and compliance scanning",
+      "preferredInstall": "uv tool install checkov",
+      "fallbackInstall": "pipx install checkov",
+      "collectorName": "checkov",
+      "source": "https://github.com/bridgecrewio/checkov"
     }
   ]
 }

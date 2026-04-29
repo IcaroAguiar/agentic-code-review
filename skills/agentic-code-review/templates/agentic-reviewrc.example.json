@@ -1,0 +1,31 @@
+{
+  "$schema": "https://raw.githubusercontent.com/IcaroAguiar/agentic-code-review/main/skills/agentic-code-review/templates/agentic-reviewrc.schema.json",
+  "rules": {
+    "magic-string": true,
+    "duplicated-literal": true,
+    "static-heavy-ui-import-without-lazy-boundary": true
+  },
+  "severities": {
+    "static-heavy-ui-import-without-lazy-boundary": "low"
+  },
+  "thresholds": {
+    "largeFileLines": 500,
+    "veryLargeFileLines": 1000,
+    "largeRefactorLines": 800,
+    "largeRefactorChangedLines": 50,
+    "longFunctionLines": 80,
+    "veryLongFunctionLines": 140,
+    "highImportCount": 25,
+    "wideConstructorParams": 8
+  },
+  "ignorePaths": [
+    "dist/**",
+    "coverage/**",
+    "generated/**"
+  ],
+  "customQuestions": [
+    "Esta mudanca afeta LGPD, privacidade, escopo de tenant ou dados sensiveis?",
+    "Existe consumidor externo ou mobile que dependa deste contrato?"
+  ],
+  "externalToolTimeoutMs": 60000
+}

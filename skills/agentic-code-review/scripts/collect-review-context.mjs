@@ -49,6 +49,8 @@ function parseArgs(argv) {
   let includeClean = false;
   let base = "";
   let head = "";
+  let json = false;
+  let configPath = "";
   let runExternalTools = false;
   let allowToolDownloads = false;
   let externalToolTimeoutMs = 60_000;
@@ -92,10 +94,72 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg.startsWith("--head=")) {
       head = arg.split("=").slice(1).join("=");
+    } else if (arg === "--json") {
+      json = true;
+    } else if (arg === "--config") {
+      configPath = resolve(argv[index + 1] || "");
+      index += 1;
+    } else if (arg.startsWith("--config=")) {
+      configPath = resolve(arg.split("=").slice(1).join("="));
     }
   }
 
-  return { roots, discoverDepth, includeClean, base, head, runExternalTools, allowToolDownloads, externalToolTimeoutMs, externalTools: externalTools.filter(Boolean) };
+  return { roots, discoverDepth, includeClean, base, head, json, configPath, runExternalTools, allowToolDownloads, externalToolTimeoutMs, externalTools: externalTools.filter(Boolean) };
+}
+
+const defaultConfig = {
+  rules: {},
+  severities: {},
+  thresholds: {
+    largeFileLines: 500,
+    veryLargeFileLines: 1000,
+    largeRefactorLines: 800,
+    largeRefactorChangedLines: 50,
+    longFunctionLines: 80,
+    veryLongFunctionLines: 140,
+    highImportCount: 25,
+    wideConstructorParams: 8,
+  },
+  ignorePaths: [],
+  customQuestions: [],
+  externalToolTimeoutMs: undefined,
+};
+
+function readJsonConfig(path) {
+  if (!path || !existsSync(path)) return {};
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    throw new Error(`Invalid agentic-code-review config at ${path}: ${error.message}`);
+  }
+}
+
+function findConfigPath(root, explicitPath) {
+  if (explicitPath) return existsSync(explicitPath) ? explicitPath : "";
+  const candidate = join(root, ".agentic-reviewrc.json");
+  return existsSync(candidate) ? candidate : "";
+}
+
+function mergeConfig(base, override) {
+  return {
+    ...base,
+    ...override,
+    rules: { ...(base.rules || {}), ...(override.rules || {}) },
+    severities: { ...(base.severities || {}), ...(override.severities || {}) },
+    thresholds: { ...(base.thresholds || {}), ...(override.thresholds || {}) },
+    ignorePaths: [...(base.ignorePaths || []), ...(override.ignorePaths || [])],
+    customQuestions: [...(base.customQuestions || []), ...(override.customQuestions || [])],
+  };
+}
+
+function pathPatternToRegex(pattern) {
+  const normalized = String(pattern || "").replace(/^\.\//, "");
+  const escaped = normalized
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*/g, "\0")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\0/g, ".*");
+  return new RegExp(`(^|/)${escaped}($|/)`);
 }
 
 function gitRoot(path) {
@@ -456,7 +520,10 @@ function scanText(repo) {
     }
 
     if (isCode(file) && !testFileForFile && changedLineCount(repo, file) > 0 && /(patch|branding|changed|merge|draft|persisted)/i.test(file + text)) {
-      if (/\breturn\s+undefined\s*;/.test(text) && /!==\s*undefined|===\s*undefined/.test(text) && !/\bNO_CHANGE\b|Symbol\s*\(\s*["'`]NO_CHANGE|noChange/i.test(text)) {
+      const undefinedSentinelWindows = [...text.matchAll(/\breturn\s+undefined\s*;/g)]
+        .map((match) => text.slice(Math.max(0, match.index - 700), Math.min(text.length, match.index + 700)))
+        .filter((window) => /(patch|branding|changed|merge|draft|persisted|apply[A-Za-z0-9_]*Patch|buildChangedValue|deepMerge|mergeDeep)/i.test(file + window));
+      if (undefinedSentinelWindows.length > 0 && /!==\s*undefined|===\s*undefined/.test(text) && !/\bNO_CHANGE\b|Symbol\s*\(\s*["'`]NO_CHANGE|noChange/i.test(text)) {
         findings.push({
           rule: "patch-undefined-no-change-ambiguity",
           severity: "medium",
@@ -775,7 +842,7 @@ function scanNPlusOne(repo) {
     return collected.join("\n");
   }
 
-  for (const file of existingFiles(repo.root, repo.entries).filter(isCode)) {
+  for (const file of existingFiles(repo.root, repo.entries).filter((value) => isCode(value) && !isTest(value))) {
     const text = readFile(repo.root, file);
     const lines = text.split(/\r?\n/);
     const seen = new Set();
@@ -948,6 +1015,80 @@ function scanRawSqlSecurity(repo) {
           line,
           window,
           "Do not interpolate external or variable input into raw SQL. Use bind parameters or allowlisted identifier maps."
+        );
+      }
+    });
+  }
+  return findings;
+}
+
+function scanWebAndRuntimeSecurity(repo) {
+  const findings = [];
+  for (const file of existingFiles(repo.root, repo.entries).filter((value) => isCode(value) && !isTest(value))) {
+    const text = readFile(repo.root, file);
+    const lines = text.split(/\r?\n/);
+
+    lines.forEach((lineText, index) => {
+      const line = index + 1;
+      const window = lines.slice(index, Math.min(index + 8, lines.length)).join("\n");
+      if (!windowTouchesChangedLine(repo, file, line, window.split(/\r?\n/).length)) return;
+
+      if (/\b(innerHTML|outerHTML|insertAdjacentHTML)\b|dangerouslySetInnerHTML/.test(lineText)
+        && !/\b(DOMPurify|sanitize|sanitizeHtml|trustedTypes|SafeHtml|htmlSafe)\b/i.test(window)) {
+        addFinding(
+          findings,
+          "potential-xss-unsanitized-html",
+          "high",
+          repo.name,
+          file,
+          line,
+          window,
+          "Do not render dynamic HTML without a sanitizer/trusted-types boundary. Prove the value is static or sanitized before assigning HTML."
+        );
+      }
+
+      if (/\b(child_process\.)?(exec|execSync)\s*\(|\bspawn\s*\(|\bspawnSync\s*\(|\bsystem\s*\(|\bpopen\s*\(/.test(lineText)
+        && /(\$\{|`|\+|req\.|request\.|params|query|body|input|argv|process\.env)/.test(window)
+        && !/\b(allowlist|whitelist|validate|escapeShellArg|shellQuote|safeCommand|spawnFile)\b/i.test(window)) {
+        addFinding(
+          findings,
+          "command-injection-risk",
+          "high",
+          repo.name,
+          file,
+          line,
+          window,
+          "Avoid shell string execution with dynamic input. Use argv arrays, allowlisted commands/flags, and validation at the boundary."
+        );
+      }
+
+      if (/\b(fs\.)?(readFile|readFileSync|createReadStream|writeFile|writeFileSync|unlink|rm|sendFile|download)\s*\(/.test(lineText)
+        && /\b(req\.|request\.|params|query|body|input|filename|path|filePath|slug|name)\b/.test(window)
+        && !/\b(normalize|resolve|safeJoin|basename|allowlist|validate|isSubpath|startsWith)\b/i.test(window)) {
+        addFinding(
+          findings,
+          "path-traversal-risk",
+          "high",
+          repo.name,
+          file,
+          line,
+          window,
+          "Normalize and constrain user-controlled paths to an allowed root, or map user input to allowlisted file identifiers."
+        );
+      }
+
+      if (/\b(console\.(log|warn|error|info)|logger\.(debug|info|warn|error))\s*\(/.test(lineText)
+        && /\b(token|secret|password|credential|authorization|cookie|set-cookie|apiKey|accessToken|refreshToken)\b/i.test(window)
+        && !/\b(redact|mask|safe|omit|sanitize)\b/i.test(window)) {
+        addFinding(
+          findings,
+          "sensitive-data-logging-risk",
+          "medium",
+          repo.name,
+          file,
+          line,
+          window,
+          "Do not log credentials, tokens, cookies, or secrets unless they are explicitly redacted before logging."
         );
       }
     });
@@ -1199,6 +1340,7 @@ function scanBundleSplitRisks(repo) {
 
 function scanCouplingAndComplexity(repo) {
   const findings = [];
+  const thresholds = repo.config.thresholds || defaultConfig.thresholds;
 
   function functionRanges(lines) {
     const ranges = [];
@@ -1249,10 +1391,10 @@ function scanCouplingAndComplexity(repo) {
       .map((part) => part.trim())
       .filter((part) => part && !part.startsWith("//")).length;
 
-    if (lines.length > 500) {
+    if (lines.length > thresholds.largeFileLines) {
       findings.push({
         rule: "large-file-touched",
-        severity: lines.length > 1000 ? "medium" : "low",
+        severity: lines.length > thresholds.veryLargeFileLines ? "medium" : "low",
         repo: repo.name,
         file,
         line: "-",
@@ -1261,7 +1403,7 @@ function scanCouplingAndComplexity(repo) {
       });
     }
 
-    if (lines.length > 800 && changedLineCount(repo, file) >= 50) {
+    if (lines.length > thresholds.largeRefactorLines && changedLineCount(repo, file) >= thresholds.largeRefactorChangedLines) {
       findings.push({
         rule: "single-responsibility-refactor-gate",
         severity: "medium",
@@ -1273,7 +1415,7 @@ function scanCouplingAndComplexity(repo) {
       });
     }
 
-    if (importCount >= 25) {
+    if (importCount >= thresholds.highImportCount) {
       findings.push({
         rule: "high-import-coupling",
         severity: "low",
@@ -1287,10 +1429,10 @@ function scanCouplingAndComplexity(repo) {
 
     for (const range of functionRanges(lines)) {
       if (!windowTouchesChangedLine(repo, file, range.start, range.length)) continue;
-      if (range.length >= 80) {
+      if (range.length >= thresholds.longFunctionLines) {
         findings.push({
           rule: "long-function-touched",
-          severity: range.length >= 140 ? "medium" : "low",
+          severity: range.length >= thresholds.veryLongFunctionLines ? "medium" : "low",
           repo: repo.name,
           file,
           line: range.start,
@@ -1345,7 +1487,7 @@ function scanCouplingAndComplexity(repo) {
       }
     }
 
-    if (constructorParams >= 8) {
+    if (constructorParams >= thresholds.wideConstructorParams) {
       findings.push({
         rule: "wide-constructor-dependency-surface",
         severity: "low",
@@ -1390,7 +1532,7 @@ function reviewQuestionsForRepo(repo, findings) {
     questions.push("Há contrato cross-repo ou consumidor externo que precisa de compatibilidade/migração antes de aprovar?");
   }
 
-  return [...new Set(questions)];
+  return [...new Set([...questions, ...(repo.config.customQuestions || [])])];
 }
 
 function runtimeVerificationRequirementsForRepo(repo, findings, repositoryCount) {
@@ -1719,18 +1861,43 @@ function riskSummary(repo) {
 }
 
 const args = parseArgs(process.argv.slice(2));
+const startConfigPath = findConfigPath(startCwd, args.configPath);
+const startConfig = mergeConfig(defaultConfig, readJsonConfig(startConfigPath));
+
+function configForRoot(root) {
+  const repoConfigPath = findConfigPath(root, args.configPath);
+  const repoConfig = repoConfigPath && repoConfigPath !== startConfigPath ? readJsonConfig(repoConfigPath) : {};
+  return mergeConfig(startConfig, repoConfig);
+}
+
+function shouldIgnoreByConfig(file, config) {
+  return (config.ignorePaths || []).some((pattern) => pathPatternToRegex(pattern).test(file));
+}
+
+function applyConfigToFindings(findings, config) {
+  return findings
+    .filter((finding) => config.rules?.[finding.rule] !== false)
+    .filter((finding) => !shouldIgnoreByConfig(finding.file, config))
+    .map((finding) => {
+      const severity = config.severities?.[finding.rule];
+      return severity ? { ...finding, severity } : finding;
+    });
+}
 
 function buildRepos() {
   const roots = args.roots.length > 0 ? args.roots.flatMap((root) => discoverGitRoots(root, args.discoverDepth)) : discoverGitRoots(startCwd, args.discoverDepth);
   const uniqueRoots = [...new Set(roots)].sort();
 
   return uniqueRoots.map((root) => {
+    const repoConfig = configForRoot(root);
     const entries = changedFileEntries(root, args.base);
     const changedLines = changedLineMap(root, args.base, entries);
     return {
       root,
       name: basename(root),
-      entries: args.includeClean ? entries : entries.filter(Boolean),
+      config: repoConfig,
+      configPath: findConfigPath(root, args.configPath) || startConfigPath || "",
+      entries: (args.includeClean ? entries : entries.filter(Boolean)).filter((entry) => !shouldIgnoreByConfig(entry.path, repoConfig)),
       changedLines,
     };
   }).filter((repo) => args.includeClean || repo.entries.length > 0);
@@ -1738,11 +1905,19 @@ function buildRepos() {
 
 const repos = buildRepos();
 
-console.log("# Agentic Code Review Packet");
-console.log("");
-console.log(`Start directory: ${startCwd}`);
-
 if (repos.length === 0) {
+  if (args.json) {
+    console.log(JSON.stringify({
+      status: "no-changed-repositories",
+      startDirectory: startCwd,
+      configPath: startConfigPath || null,
+      repositories: [],
+    }, null, 2));
+    process.exit(2);
+  }
+  console.log("# Agentic Code Review Packet");
+  console.log("");
+  console.log(`Start directory: ${startCwd}`);
   console.log("Collector status: no changed Git repositories detected");
   console.log("");
   console.log("Run from a Git repository, pass one or more `--root <path>` values, or use a parent directory that contains changed Git repositories.");
@@ -1753,14 +1928,16 @@ const allFindings = [];
 let totalFiles = 0;
 let totalCodeFiles = 0;
 let totalTestFiles = 0;
+const repositoryPackets = [];
 
 for (const repo of repos) {
   const files = repo.entries.map((entry) => entry.path);
-  const findings = compressFindings([
+  const findings = applyConfigToFindings(compressFindings([
     ...scanText(repo),
     ...scanNPlusOne(repo),
     ...scanDataConsistency(repo),
     ...scanRawSqlSecurity(repo),
+    ...scanWebAndRuntimeSecurity(repo),
     ...scanUnboundedDataAccess(repo),
     ...scanFrameworkSpecific(repo),
     ...scanPublicContractIntegrity(repo),
@@ -1772,41 +1949,12 @@ for (const repo of repos) {
     ...scanCrossRepoContracts(repo, repos.length),
     ...scanPackageImpact(repo),
     ...scanArtifactImpact(repo),
-  ]);
+  ]), repo.config);
   allFindings.push(...findings);
   totalFiles += files.length;
   totalCodeFiles += files.filter((file) => isCode(file) && !isTest(file)).length;
   totalTestFiles += files.filter(isTest).length;
-
-  console.log("");
-  console.log(`## Repository: ${repo.name}`);
-  console.log(`Path: ${repo.root}`);
-  console.log(`Changed files: ${files.length}`);
-  console.log(`Code files: ${files.filter((file) => isCode(file) && !isTest(file)).length}`);
-  console.log(`Test files: ${files.filter(isTest).length}`);
-  console.log("");
-
-  console.log("### Risk Signals");
   const risks = riskSummary(repo);
-  if (risks.length === 0) {
-    console.log("- none detected from paths");
-  } else {
-    risks.forEach((risk) => console.log(`- ${risk}`));
-  }
-  console.log("");
-
-  console.log("### Changed Files");
-  if (repo.entries.length === 0) {
-    console.log("- no git changed files detected");
-  } else {
-    repo.entries.forEach((entry) => {
-      const status = entry.status === "D" ? "deleted" : entry.status === "A" ? "added" : entry.status === "M" ? "modified" : entry.status;
-      const previous = entry.previousPath ? ` from ${entry.previousPath}` : "";
-      console.log(`- [${status}] ${entry.path}${previous}`);
-    });
-  }
-  console.log("");
-
   const severities = findings.reduce((acc, finding) => {
     acc[finding.severity] = (acc[finding.severity] || 0) + 1;
     return acc;
@@ -1814,54 +1962,156 @@ for (const repo of repos) {
   const questions = reviewQuestionsForRepo(repo, findings);
   const runtimeRequirements = runtimeVerificationRequirementsForRepo(repo, findings, repos.length);
   const normalized = normalizedGateSummary(findings, runtimeRequirements, questions, isTest);
+  const externalTools = externalToolbelt(repo, args.runExternalTools, args.allowToolDownloads, args.externalTools, repo.config.externalToolTimeoutMs || args.externalToolTimeoutMs);
+
+  repositoryPackets.push({
+    name: repo.name,
+    path: repo.root,
+    configPath: repo.configPath || null,
+    changedFiles: files.length,
+    codeFiles: files.filter((file) => isCode(file) && !isTest(file)).length,
+    testFiles: files.filter(isTest).length,
+    riskSignals: risks,
+    files: repo.entries.map((entry) => ({
+      status: entry.status === "D" ? "deleted" : entry.status === "A" ? "added" : entry.status === "M" ? "modified" : entry.status,
+      path: entry.path,
+      previousPath: entry.previousPath,
+    })),
+    normalizedGateSummary: normalized,
+    findingsSummary: {
+      total: findings.length,
+      high: severities.high || 0,
+      medium: severities.medium || 0,
+      low: severities.low || 0,
+    },
+    findings,
+    userInputCheckpoints: questions,
+    runtimeVerificationRequirements: runtimeRequirements,
+    externalToolbelt: {
+      mode: args.runExternalTools ? "run-installed-tools" : "inventory-only",
+      downloadsEnabled: args.allowToolDownloads,
+      selectedTools: args.externalTools,
+      tools: externalTools,
+    },
+  });
+}
+
+const globalSeverities = allFindings.reduce((acc, finding) => {
+  acc[finding.severity] = (acc[finding.severity] || 0) + 1;
+  return acc;
+}, {});
+
+const packet = {
+  status: "ok",
+  startDirectory: startCwd,
+  configPath: startConfigPath || null,
+  repositories: repositoryPackets,
+  crossRepoSummary: {
+    repositoriesWithChanges: repos.length,
+    changedFiles: totalFiles,
+    codeFiles: totalCodeFiles,
+    testFiles: totalTestFiles,
+    findings: allFindings.length,
+    high: globalSeverities.high || 0,
+    medium: globalSeverities.medium || 0,
+    low: globalSeverities.low || 0,
+  },
+  reviewerInstructions: [
+    "Treat scanner output as signal, not proof. Verify against the code before raising a finding.",
+    "Review every repository section when this packet spans multiple repositories.",
+    "Prioritize concrete correctness, regression, N+1, data consistency, validation, security, maintainability, and cross-repo contract issues.",
+    "When the packet is noisy, prioritize semantic/behavioral findings over magic-string, duplicated-literal, large-file, or SRP context signals unless those are verified as logic-bearing or regression-prone.",
+    "Do not report style-only or hypothetical issues without code evidence.",
+    "Treat User Input Checkpoints as questions to resolve before turning context-dependent scope, refactor, or coverage concerns into blocking findings.",
+    "Treat Runtime Verification Requirements as required closeout evidence. Static checks, command dumps, or copied probes do not prove executable behavior.",
+  ],
+};
+
+if (args.json) {
+  console.log(JSON.stringify(packet, null, 2));
+  process.exit(0);
+}
+
+console.log("# Agentic Code Review Packet");
+console.log("");
+console.log(`Start directory: ${packet.startDirectory}`);
+if (packet.configPath) console.log(`Config: ${packet.configPath}`);
+
+for (const repoPacket of packet.repositories) {
+  console.log("");
+  console.log(`## Repository: ${repoPacket.name}`);
+  console.log(`Path: ${repoPacket.path}`);
+  if (repoPacket.configPath) console.log(`Config: ${repoPacket.configPath}`);
+  console.log(`Changed files: ${repoPacket.changedFiles}`);
+  console.log(`Code files: ${repoPacket.codeFiles}`);
+  console.log(`Test files: ${repoPacket.testFiles}`);
+  console.log("");
+
+  console.log("### Risk Signals");
+  if (repoPacket.riskSignals.length === 0) {
+    console.log("- none detected from paths");
+  } else {
+    repoPacket.riskSignals.forEach((risk) => console.log(`- ${risk}`));
+  }
+  console.log("");
+
+  console.log("### Changed Files");
+  if (repoPacket.files.length === 0) {
+    console.log("- no git changed files detected");
+  } else {
+    repoPacket.files.forEach((entry) => {
+      const previous = entry.previousPath ? ` from ${entry.previousPath}` : "";
+      console.log(`- [${entry.status}] ${entry.path}${previous}`);
+    });
+  }
+  console.log("");
 
   console.log("### Normalized Gate Summary");
-  console.log(`- blocking: ${normalized.blocking}`);
-  console.log(`- review-signal: ${normalized["review-signal"]}`);
-  console.log(`- runtime-required: ${normalized["runtime-required"]}`);
-  console.log(`- user-input-checkpoint: ${normalized["user-input-checkpoint"]}`);
-  console.log(`- informational: ${normalized.informational}`);
+  console.log(`- blocking: ${repoPacket.normalizedGateSummary.blocking}`);
+  console.log(`- review-signal: ${repoPacket.normalizedGateSummary["review-signal"]}`);
+  console.log(`- runtime-required: ${repoPacket.normalizedGateSummary["runtime-required"]}`);
+  console.log(`- user-input-checkpoint: ${repoPacket.normalizedGateSummary["user-input-checkpoint"]}`);
+  console.log(`- informational: ${repoPacket.normalizedGateSummary.informational}`);
   console.log("");
 
   console.log("### Deterministic Scan Findings");
-  console.log(`Total: ${findings.length} (high: ${severities.high || 0}, medium: ${severities.medium || 0}, low: ${severities.low || 0})`);
-  if (findings.length === 0) {
+  console.log(`Total: ${repoPacket.findingsSummary.total} (high: ${repoPacket.findingsSummary.high}, medium: ${repoPacket.findingsSummary.medium}, low: ${repoPacket.findingsSummary.low})`);
+  if (repoPacket.findings.length === 0) {
     console.log("- no deterministic findings");
   } else {
-    findings.slice(0, 80).forEach((finding) => {
+    repoPacket.findings.slice(0, 80).forEach((finding) => {
       console.log(`- [${finding.severity}] ${finding.rule} at ${finding.file}:${finding.line}`);
       console.log(`  Evidence: ${finding.text.replace(/\s+/g, " ")}`);
       console.log(`  Suggestion: ${finding.suggestion}`);
     });
-    if (findings.length > 80) console.log(`- truncated ${findings.length - 80} additional findings`);
+    if (repoPacket.findings.length > 80) console.log(`- truncated ${repoPacket.findings.length - 80} additional findings`);
   }
   console.log("");
 
   console.log("### User Input Checkpoints");
-  if (questions.length === 0) {
+  if (repoPacket.userInputCheckpoints.length === 0) {
     console.log("- none");
   } else {
-    questions.forEach((question) => console.log(`- ${question}`));
+    repoPacket.userInputCheckpoints.forEach((question) => console.log(`- ${question}`));
   }
   console.log("");
 
   console.log("### Runtime Verification Requirements");
-  if (runtimeRequirements.length === 0) {
+  if (repoPacket.runtimeVerificationRequirements.length === 0) {
     console.log("- none");
   } else {
-    runtimeRequirements.forEach((requirement) => console.log(`- ${requirement}`));
+    repoPacket.runtimeVerificationRequirements.forEach((requirement) => console.log(`- ${requirement}`));
   }
   console.log("");
 
-  const externalTools = externalToolbelt(repo, args.runExternalTools, args.allowToolDownloads, args.externalTools, args.externalToolTimeoutMs);
   console.log("### Optional External Toolbelt");
-  console.log(`Mode: ${args.runExternalTools ? "run installed tools" : "inventory only; pass --run-external-tools to execute installed tools"}`);
-  if (!args.allowToolDownloads) console.log("Downloads: disabled; pass --allow-tool-downloads to permit npx/uvx fallback tools");
-  if (args.externalTools.length > 0) console.log(`Selected tools: ${args.externalTools.join(", ")}`);
-  if (externalTools.length === 0) {
+  console.log(`Mode: ${repoPacket.externalToolbelt.mode === "run-installed-tools" ? "run installed tools" : "inventory only; pass --run-external-tools to execute installed tools"}`);
+  if (!repoPacket.externalToolbelt.downloadsEnabled) console.log("Downloads: disabled; pass --allow-tool-downloads to permit npx/uvx fallback tools");
+  if (repoPacket.externalToolbelt.selectedTools.length > 0) console.log(`Selected tools: ${repoPacket.externalToolbelt.selectedTools.join(", ")}`);
+  if (repoPacket.externalToolbelt.tools.length === 0) {
     console.log("- none applicable");
   } else {
-    externalTools.forEach((tool) => {
+    repoPacket.externalToolbelt.tools.forEach((tool) => {
       console.log(`- [${tool.status}] ${tool.name}: ${tool.purpose}`);
       if (tool.available) console.log(`  Command: ${tool.command} ${tool.args.join(" ")}`);
       if (tool.installHint) console.log(`  Install: ${tool.installHint}`);
@@ -1870,25 +2120,14 @@ for (const repo of repos) {
   }
 }
 
-const globalSeverities = allFindings.reduce((acc, finding) => {
-  acc[finding.severity] = (acc[finding.severity] || 0) + 1;
-  return acc;
-}, {});
-
 console.log("");
 console.log("## Cross-Repo Summary");
-console.log(`Repositories with changes: ${repos.length}`);
-console.log(`Changed files: ${totalFiles}`);
-console.log(`Code files: ${totalCodeFiles}`);
-console.log(`Test files: ${totalTestFiles}`);
-console.log(`Findings: ${allFindings.length} (high: ${globalSeverities.high || 0}, medium: ${globalSeverities.medium || 0}, low: ${globalSeverities.low || 0})`);
+console.log(`Repositories with changes: ${packet.crossRepoSummary.repositoriesWithChanges}`);
+console.log(`Changed files: ${packet.crossRepoSummary.changedFiles}`);
+console.log(`Code files: ${packet.crossRepoSummary.codeFiles}`);
+console.log(`Test files: ${packet.crossRepoSummary.testFiles}`);
+console.log(`Findings: ${packet.crossRepoSummary.findings} (high: ${packet.crossRepoSummary.high}, medium: ${packet.crossRepoSummary.medium}, low: ${packet.crossRepoSummary.low})`);
 console.log("");
 
 console.log("## Reviewer Instructions");
-console.log("- Treat scanner output as signal, not proof. Verify against the code before raising a finding.");
-console.log("- Review every repository section when this packet spans multiple repositories.");
-console.log("- Prioritize concrete correctness, regression, N+1, data consistency, validation, security, maintainability, and cross-repo contract issues.");
-console.log("- When the packet is noisy, prioritize semantic/behavioral findings over magic-string, duplicated-literal, large-file, or SRP context signals unless those are verified as logic-bearing or regression-prone.");
-console.log("- Do not report style-only or hypothetical issues without code evidence.");
-console.log("- Treat User Input Checkpoints as questions to resolve before turning context-dependent scope, refactor, or coverage concerns into blocking findings.");
-console.log("- Treat Runtime Verification Requirements as required closeout evidence. Static checks, command dumps, or copied probes do not prove executable behavior.");
+packet.reviewerInstructions.forEach((instruction) => console.log(`- ${instruction}`));
