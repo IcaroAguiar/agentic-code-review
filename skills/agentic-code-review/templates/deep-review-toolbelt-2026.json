@@ -107,6 +107,54 @@
       "source": "https://brakemanscanner.org/"
     },
     {
+      "name": "spotbugs",
+      "recommendedVersion": "latest stable",
+      "purpose": "Java bytecode bug and security smell scanning",
+      "preferredInstall": "brew install spotbugs",
+      "collectorName": "spotbugs",
+      "source": "https://spotbugs.github.io/"
+    },
+    {
+      "name": "findsecbugs",
+      "recommendedVersion": "latest stable",
+      "purpose": "FindSecBugs Java security rules for SpotBugs",
+      "preferredInstall": "Install FindSecBugs/SpotBugs plugin",
+      "collectorName": "findsecbugs",
+      "source": "https://find-sec-bugs.github.io/"
+    },
+    {
+      "name": "cppcheck",
+      "recommendedVersion": "latest stable",
+      "purpose": "C/C++ static analysis for bugs, undefined behavior, and security smells",
+      "preferredInstall": "brew install cppcheck",
+      "collectorName": "cppcheck",
+      "source": "https://cppcheck.sourceforge.io/"
+    },
+    {
+      "name": "clang-tidy",
+      "recommendedVersion": "latest stable",
+      "purpose": "C/C++ clang-tidy diagnostics for correctness and maintainability",
+      "preferredInstall": "brew install llvm",
+      "collectorName": "clang-tidy",
+      "source": "https://clang.llvm.org/extra/clang-tidy/"
+    },
+    {
+      "name": "phpstan",
+      "recommendedVersion": "latest stable",
+      "purpose": "PHP static analysis and type-safety review",
+      "preferredInstall": "composer require --dev phpstan/phpstan",
+      "collectorName": "phpstan",
+      "source": "https://phpstan.org/"
+    },
+    {
+      "name": "psalm",
+      "recommendedVersion": "latest stable",
+      "purpose": "PHP static analysis and taint/security-aware review",
+      "preferredInstall": "composer require --dev vimeo/psalm",
+      "collectorName": "psalm",
+      "source": "https://psalm.dev/"
+    },
+    {
       "name": "bundler-audit",
       "recommendedVersion": "latest stable",
       "purpose": "Ruby dependency vulnerability scanning",
@@ -162,6 +210,22 @@
       "preferredInstall": "brew install regula",
       "collectorName": "regula",
       "source": "https://github.com/fugue/regula"
+    },
+    {
+      "name": "eslint-jsx-a11y",
+      "recommendedVersion": "latest stable",
+      "purpose": "React/JSX accessibility linting through project ESLint config",
+      "preferredInstall": "npm install -D eslint eslint-plugin-jsx-a11y",
+      "collectorName": "eslint-jsx-a11y",
+      "source": "https://github.com/jsx-eslint/eslint-plugin-jsx-a11y"
+    },
+    {
+      "name": "axe",
+      "recommendedVersion": "latest stable",
+      "purpose": "Opt-in rendered-page accessibility scanning",
+      "preferredInstall": "npm install -g @axe-core/cli",
+      "collectorName": "axe",
+      "source": "https://github.com/dequelabs/axe-core-npm"
     },
     {
       "name": "autocannon",

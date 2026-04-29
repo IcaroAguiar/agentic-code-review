@@ -44,6 +44,8 @@ export function externalToolbelt(repo, shouldRun, allowDownloads = false, select
   const selected = new Set(selectedToolNames);
   const dastTarget = repo.config?.dastTargets?.[0] || "";
   const performanceTarget = repo.config?.performanceTargets?.[0] || "";
+  const a11yTarget = repo.config?.a11yTargets?.[0] || "";
+  const firstCppFile = repo.entries.find((entry) => /\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$/i.test(entry.path))?.path || "";
   const rubyUserGemBins = (() => {
     const home = process.env.HOME || "";
     if (!home) return [];
@@ -357,6 +359,94 @@ export function externalToolbelt(repo, shouldRun, allowDownloads = false, select
       runWhen: () => repo.entries.some((entry) => /\.rb$|(^|\/)Gemfile/.test(entry.path)),
     },
     {
+      name: "spotbugs",
+      purpose: "Java bytecode bug and security smell scanning",
+      candidates: [
+        {
+          command: "spotbugs",
+          args: ["-textui", "-effort:max", "-low", repo.root],
+          downloads: false,
+        },
+      ],
+      installHint: "brew install spotbugs",
+      runWhen: () => repo.entries.some((entry) => /\.(java|kt)$|(^|\/)(pom\.xml|build\.gradle|build\.gradle\.kts)$/.test(entry.path)),
+    },
+    {
+      name: "findsecbugs",
+      purpose: "FindSecBugs Java security rules for SpotBugs",
+      candidates: [
+        {
+          command: "findsecbugs",
+          args: [repo.root],
+          downloads: false,
+        },
+      ],
+      installHint: "Install FindSecBugs/SpotBugs plugin and expose findsecbugs or configure SpotBugs with the FindSecBugs plugin",
+      runWhen: () => repo.entries.some((entry) => /\.(java|kt)$|(^|\/)(pom\.xml|build\.gradle|build\.gradle\.kts)$/.test(entry.path)),
+    },
+    {
+      name: "cppcheck",
+      purpose: "C/C++ static analysis for bugs, undefined behavior, and security smells",
+      candidates: [
+        {
+          command: "cppcheck",
+          args: ["--enable=warning,style,performance,portability", "--error-exitcode=1", repo.root],
+          downloads: false,
+        },
+      ],
+      installHint: "brew install cppcheck",
+      runWhen: () => repo.entries.some((entry) => /\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$/i.test(entry.path)),
+    },
+    {
+      name: "clang-tidy",
+      purpose: "C/C++ clang-tidy diagnostics for correctness, maintainability, and concurrency-sensitive code",
+      candidates: [
+        {
+          command: "clang-tidy",
+          args: firstCppFile ? [firstCppFile, "--"] : ["--version"],
+          downloads: false,
+        },
+      ],
+      installHint: "brew install llvm and ensure clang-tidy is on PATH",
+      runWhen: () => Boolean(firstCppFile),
+    },
+    {
+      name: "phpstan",
+      purpose: "PHP static analysis and type-safety review",
+      candidates: [
+        {
+          command: "phpstan",
+          args: ["analyse", "--no-progress", repo.root],
+          downloads: false,
+        },
+        {
+          command: "vendor/bin/phpstan",
+          args: ["analyse", "--no-progress", repo.root],
+          downloads: false,
+        },
+      ],
+      installHint: "composer require --dev phpstan/phpstan",
+      runWhen: () => repo.entries.some((entry) => /\.php$|(^|\/)composer\.(json|lock)$/.test(entry.path)),
+    },
+    {
+      name: "psalm",
+      purpose: "PHP static analysis and taint/security-aware review",
+      candidates: [
+        {
+          command: "psalm",
+          args: ["--no-progress", "--output-format=console"],
+          downloads: false,
+        },
+        {
+          command: "vendor/bin/psalm",
+          args: ["--no-progress", "--output-format=console"],
+          downloads: false,
+        },
+      ],
+      installHint: "composer require --dev vimeo/psalm",
+      runWhen: () => repo.entries.some((entry) => /\.php$|(^|\/)(composer\.json|psalm\.xml)$/.test(entry.path)),
+    },
+    {
       name: "bundler-audit",
       purpose: "Ruby dependency vulnerability scanning",
       candidates: [
@@ -417,6 +507,42 @@ export function externalToolbelt(repo, shouldRun, allowDownloads = false, select
       ],
       installHint: "brew install regula",
       runWhen: () => repo.entries.some((entry) => /(^|\/)(terraform|\.tf$|k8s|kubernetes|cloudformation|template\.ya?ml$)/i.test(entry.path)),
+    },
+    {
+      name: "eslint-jsx-a11y",
+      purpose: "React/JSX accessibility linting when project ESLint config includes jsx-a11y rules",
+      candidates: [
+        {
+          command: "eslint",
+          args: [repo.root, "--max-warnings=0"],
+          downloads: false,
+        },
+        {
+          command: "npx",
+          args: ["--yes", "eslint", repo.root, "--max-warnings=0"],
+          downloads: true,
+        },
+      ],
+      installHint: "npm install -D eslint eslint-plugin-jsx-a11y",
+      runWhen: () => repo.entries.some((entry) => /\.(tsx|jsx)$/.test(entry.path)) && (selected.has("eslint-jsx-a11y") || repo.entries.some((entry) => /(^|\/)(eslint\.config\.[cm]?[jt]s|\.eslintrc(\.|$))/.test(entry.path))),
+    },
+    {
+      name: "axe",
+      purpose: "Opt-in browser accessibility scan for configured rendered UI targets",
+      candidates: [
+        {
+          command: "axe",
+          args: [a11yTarget, "--exit"],
+          downloads: false,
+        },
+        {
+          command: "npx",
+          args: ["--yes", "@axe-core/cli", a11yTarget, "--exit"],
+          downloads: true,
+        },
+      ],
+      installHint: "npm install -g @axe-core/cli",
+      runWhen: () => selected.has("axe") && Boolean(a11yTarget),
     },
     {
       name: "autocannon",

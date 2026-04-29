@@ -101,12 +101,15 @@ Prioritize:
 - raw SQL, unsafe query APIs, interpolated SQL, and SQL injection risk;
 - unsafe HTML rendering, command execution with dynamic input, path traversal, sensitive-data logging, and other web/runtime security sinks;
 - OWASP-style boundary risks: weak crypto, insecure HTTP, permissive CORS, unsafe cookies, SSRF, open redirects, upload validation gaps, webhook signature gaps, and auth endpoints without rate-limit signals;
+- REST/API design risks: verb-oriented paths, mutating GET semantics, ambiguous mutation status codes, collection routes without pagination/filter/sort contracts, public APIs without a visible versioning strategy, and missing OpenAPI/consumer compatibility evidence;
+- UI semantics/accessibility risks: missing landmarks, image alternatives, labels, keyboard semantics, and button/link distinction; rendered UI should be validated with browser-use plus axe, Testing Library role queries, jsx-a11y, or equivalent tooling when relevant;
 - N+1 query patterns and per-item async calls that break at scale;
 - unbounded list/query access without an obvious limit, pagination, cursor, or batch boundary;
 - public/API response integrity: never expose raw domain, persistence, legacy, private, or internal state directly; public compatibility aliases must be sanitized subsets, while full contracts should live behind explicit public DTOs/resources;
 - weak boundary validation for public configuration, visual tokens, enums, modes, statuses, roles, provider names, URLs, radii, gradients, and other runtime-controlling strings;
 - error handling, swallowed exceptions, null fallbacks that mask UI error states, non-actionable messages, retries, timeouts, and rollback behavior;
 - architecture boundaries, responsibility size, hidden coupling, duplicated helper conventions, and circular dependencies;
+- framework-aware boundary fit: Django/Express/Rails route conventions, React/Vue/Svelte template semantics, Tailwind/BEM styling conventions, and separation between presentation, application/domain logic, and data/persistence;
 - patch semantics for optional nested data, especially no-change sentinels, null/undefined deletion semantics, and reset behavior;
 - runtime visual-contract integrity: enum membership normalization, honest icon/visual-style contracts, and sanitized CSS/branding tokens;
 - single responsibility violations, large files that keep accumulating reasons to change, long functions, deep nesting, unnecessary `else` branches, and Object Calisthenics signals when they affect maintainability or risk;
@@ -128,6 +131,9 @@ It checks for signals, not final proof:
 - weak cryptography, obsolete hash algorithms, missing password KDF/salt signals, insecure HTTP URLs, permissive CORS, cookies missing SameSite/Secure/HttpOnly, SSRF, open redirects, upload validation gaps, webhook endpoints without signature verification, auth boundaries without rate-limit signals, retries without backoff/timeout, and shared mutable state in async/concurrent contexts;
 - unbounded list/query access that lacks an obvious limit, pagination, cursor, or batch boundary;
 - public/API contract mappers that expose raw/internal/legacy/domain fields without a sanitizer, redaction, DTO/resource adapter, allowlist, or public type;
+- REST/API route design signals for nouns/resources, method semantics, status codes, pagination/filter contracts, and versioning;
+- UI semantic/a11y signals for landmarks, image alt text, input labels, keyboard-reachable controls, and correct action/navigation elements;
+- architecture/layering signals for domain imports from outer layers, presentation importing persistence/data directly, missing port/interface boundaries, and UI rendering mixed with direct data access;
 - public response/resource/DTO types that reuse broad internal/domain/persistence types instead of sanitized public types;
 - string-only validation for configurable public fields, visual tokens, enums, statuses, roles, provider names, URLs, modes, or other runtime-controlling values;
 - asymmetric defaults/normalization for sibling configurable runtime objects, which can cause stale or invalid state to drift silently;
@@ -176,6 +182,10 @@ Optional external toolbelt:
 - Python: `bandit` and `pip-audit`;
 - Go: `gosec` and `govulncheck`;
 - Ruby: `brakeman` and `bundler-audit`;
+- Java/Kotlin: `spotbugs` and `findsecbugs`;
+- C/C++: `cppcheck` and `clang-tidy`;
+- PHP: `phpstan` and `psalm`;
+- UI accessibility: `eslint-jsx-a11y` and opt-in `axe`;
 - Docker/IaC: `trivy`, `checkov`, and `regula`;
 - performance and DAST tools are opt-in only: `autocannon`, `wrk`, and OWASP `zap-baseline`, requiring `performanceTargets` or `dastTargets` in config and explicit `--external-tool`.
 
@@ -183,8 +193,9 @@ These tools are additive evidence. Missing tools do not block by themselves; fin
 
 Project config:
 - Use `.agentic-reviewrc.json` to disable noisy rules, override severity, tune thresholds, ignore generated paths, add business-specific questions, and set external tool timeouts.
+- Use `appType` for adaptive thresholds: `public-api` and `microservice` are stricter on file/function size and coupling; `monolith` allows larger files while still flagging broad responsibility growth.
 - Use `domainCatalogs` for built-in LGPD/privacy, finance, and health review questions.
-- Use `dastTargets` and `performanceTargets` only for explicit staging/load-test workflows; they are not run by default.
+- Use `dastTargets`, `performanceTargets`, and `a11yTargets` only for explicit staging/load-test/accessibility workflows; they are not run by default unless their named external tool is selected.
 - Prefer config tuning over weakening generic rules when one repository has special conventions.
 - Keep config small and explicit; do not use it to hide real risk.
 
@@ -203,7 +214,7 @@ After editing this skill or its scripts, run:
 node ~/.agents/skills/agentic-code-review/scripts/smoke-review-toolbelt.mjs
 ```
 
-The smoke creates temporary repositories and verifies core gates: SQL injection, N+1, unbounded list queries, local artifacts, control blocks not being treated as functions, production/test literal classification, mock-only tests, stale test mocks, narrating comments, happy-path-only tests, local literal paths, backend boundary integration/e2e coverage, and cross-repo contract checks.
+The smoke creates temporary repositories and verifies core gates: SQL injection, N+1, unbounded list queries, REST/API design, UI semantics/accessibility, architecture boundaries, local artifacts, control blocks not being treated as functions, production/test literal classification, mock-only tests, stale test mocks, narrating comments, happy-path-only tests, local literal paths, backend boundary integration/e2e coverage, and cross-repo contract checks.
 
 ## High-Testability Runtime Gate
 
@@ -257,6 +268,7 @@ Ask for user input when a checkpoint depends on:
 - whether repeated literals are intentional domain vocabulary, fixtures, or should become canonical constants/enums/schemas;
 - whether backend changes require e2e/integration coverage beyond focused unit tests;
 - whether a cross-repo contract has external consumers, compatibility constraints, or a migration window;
+- whether API design, OpenAPI compatibility, UI semantics/accessibility, or architecture layering must block this PR or become explicit follow-up;
 - whether a generated file, local artifact, or broad diff is intentionally versioned.
 
 If `request_user_input` is available in the current mode, use it for 1-3 short, mutually exclusive questions. In Default mode, ask concise plain-text questions and pause only when the answer materially changes the verdict. Until answered, place the item in `Escopo não revisado` or `Pontos de atenção adicionais`, not as a forced blocking finding.

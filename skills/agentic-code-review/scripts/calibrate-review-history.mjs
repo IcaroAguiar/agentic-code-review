@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -62,20 +62,49 @@ function parseArgs(argv) {
 }
 
 function run(command, args, cwd) {
+  const stdoutPath = join("/tmp", `agentic-code-review-calibrate-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
+  const stdoutFd = openSync(stdoutPath, "w");
+  const cleanup = () => {
+    try {
+      unlinkSync(stdoutPath);
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  };
+  const close = () => {
+    try {
+      closeSync(stdoutFd);
+    } catch (error) {
+      if (error?.code !== "EBADF") throw error;
+    }
+  };
   try {
+    const result = spawnSync(command, args, {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024 * 128,
+      stdio: ["ignore", stdoutFd, "pipe"],
+    });
+    close();
+    const stdout = readFileSync(stdoutPath, "utf8");
+    cleanup();
     return {
-      ok: true,
-      stdout: execFileSync(command, args, {
-        cwd,
-        encoding: "utf8",
-        maxBuffer: 1024 * 1024 * 48,
-        stdio: ["ignore", "pipe", "pipe"],
-      }),
+      ok: result.status === 0,
+      stdout,
+      stderr: result.stderr?.toString?.() || result.error?.message || "",
     };
   } catch (error) {
+    close();
+    let stdout = "";
+    try {
+      stdout = readFileSync(stdoutPath, "utf8");
+      cleanup();
+    } catch (readError) {
+      if (readError?.code !== "ENOENT") throw readError;
+    }
     return {
       ok: false,
-      stdout: error.stdout?.toString?.() || "",
+      stdout,
       stderr: error.stderr?.toString?.() || error.message,
     };
   }

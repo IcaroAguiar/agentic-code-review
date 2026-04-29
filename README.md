@@ -41,6 +41,10 @@ agentic-code-review/
         idempotency-test.vitest.ts
         transaction-rollback-test.vitest.ts
         validation-boundary-test.vitest.ts
+        rest-api-contract-test.vitest.ts
+        openapi-compatibility-test.vitest.ts
+        ui-semantic-a11y-test.vitest.ts
+        layer-boundary-test.vitest.ts
 ```
 
 ## Installation
@@ -184,8 +188,10 @@ Supported fields:
 - `ignorePaths`: ignore generated or project-specific paths using simple glob-like patterns.
 - `customQuestions`: add project/business checkpoints to every packet.
 - `domainCatalogs`: add built-in LGPD/privacy, finance, or health review checkpoints.
+- `appType`: tune adaptive thresholds for `monolith`, `microservice`, `public-api`, `frontend`, or `library`.
 - `dastTargets`: staging URLs for explicit OWASP ZAP baseline scans.
 - `performanceTargets`: URLs for explicit `autocannon`/`wrk` load smoke runs.
+- `a11yTargets`: rendered UI URLs for explicit axe accessibility scans.
 - `externalToolTimeoutMs`: set the default optional tool timeout for that repository.
 
 ### `agentic-code-review calibrate`
@@ -207,7 +213,7 @@ Runs the fixture smoke suite for the skill and scripts:
 npx agentic-code-review smoke
 ```
 
-The smoke suite creates temporary Git repositories under `/private/tmp/agentic-code-review-smoke` and verifies scanner behavior for core cases such as SQL injection, N+1, unbounded list queries, patch semantics, public contract leaks, UI token validation, large-file signals, cross-repo contracts, historical `--base/--head` ranges, and optional tool selection.
+The smoke suite creates temporary Git repositories under `/private/tmp/agentic-code-review-smoke` and verifies scanner behavior for core cases such as SQL injection, N+1, unbounded list queries, REST/API design, UI semantics/accessibility, architecture boundaries, patch semantics, public contract leaks, UI token validation, large-file signals, cross-repo contracts, historical `--base/--head` ranges, and optional tool selection.
 
 It also validates JSON output, project config behavior, domain catalogs, and generic web/runtime/OWASP security signals such as unsafe HTML sinks, command injection, path traversal, weak crypto, permissive CORS, unsafe cookies, SSRF, open redirects, uploads, webhook signatures, retry/backoff gaps, and sensitive-data logging.
 
@@ -292,6 +298,9 @@ The collector currently checks for:
 - read-then-write without obvious transaction, lock, or idempotency guard;
 - external side effects inside transactions;
 - public/API response mappers that expose raw, internal, legacy, or domain state without sanitization;
+- REST/API route design signals: verb-oriented paths, unsafe GET mutation signals, mutation status-code ambiguity, collection routes without pagination/filter contracts, and public routes without visible versioning strategy;
+- UI semantic and accessibility signals: missing image alternatives, unlabeled inputs, clickable divs without keyboard semantics, link/button semantic drift, and page/layout files with many divs but no landmarks;
+- architecture boundary signals: domain imports from outer/framework layers, presentation importing data/persistence directly, missing port/interface boundaries, and UI mixing rendering with direct data access;
 - public response types that reuse broad internal/domain/persistence types;
 - weak string-only validation for runtime-controlling config, visual tokens, statuses, roles, URLs, modes, and provider values;
 - asymmetric defaults or normalization for configurable runtime objects;
@@ -342,6 +351,15 @@ The built-in scanner works without external dependencies. For deeper review, ins
 | `dependency-cruiser` | JS/TS dependency boundaries and cycles |
 | `madge` | JS/TS circular dependencies |
 | `osv-scanner` | Dependency vulnerability scanning |
+| `bandit` / `pip-audit` | Python security and dependency vulnerability scanning |
+| `gosec` / `govulncheck` | Go security and vulnerability scanning |
+| `brakeman` / `bundler-audit` | Ruby/Rails security and dependency scanning |
+| `spotbugs` / `findsecbugs` | Java bug and security scanning |
+| `cppcheck` / `clang-tidy` | C/C++ static analysis |
+| `phpstan` / `psalm` | PHP static analysis |
+| `eslint-jsx-a11y` / `axe` | UI accessibility linting and opt-in rendered-page scans |
+| `trivy` / `grype` / `checkov` / `regula` | Containers, dependencies, and IaC scanning |
+| `autocannon` / `wrk` / `zap-baseline` | Opt-in load and DAST checks for configured targets |
 
 The reference manifest is:
 
@@ -447,6 +465,22 @@ Use it for:
 - public API contracts;
 - command input;
 - visual/runtime configuration tokens.
+
+### `rest-api-contract-test.vitest.ts`
+
+Example test shape for proving REST method semantics, status codes, pagination, filters, and resource-oriented routes through the real HTTP boundary.
+
+### `openapi-compatibility-test.vitest.ts`
+
+Example test shape for proving generated or checked-in OpenAPI contracts document the changed public route, status codes, parameters, and error responses.
+
+### `ui-semantic-a11y-test.vitest.ts`
+
+Example test shape for semantic landmarks, labels, image alternatives, button/link semantics, and automated accessibility checks.
+
+### `layer-boundary-test.vitest.ts`
+
+Example test shape for proving application/domain boundaries through ports or fakes without importing concrete persistence/framework layers.
 
 ### `calibration-2026-04-28.md`
 

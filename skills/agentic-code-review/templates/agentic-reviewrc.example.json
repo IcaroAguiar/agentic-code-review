@@ -8,6 +8,7 @@
   "severities": {
     "static-heavy-ui-import-without-lazy-boundary": "low"
   },
+  "appType": "public-api",
   "thresholds": {
     "largeFileLines": 500,
     "veryLargeFileLines": 1000,
@@ -36,6 +37,9 @@
   ],
   "performanceTargets": [
     "https://staging.example.com/health"
+  ],
+  "a11yTargets": [
+    "https://staging.example.com/dashboard"
   ],
   "externalToolTimeoutMs": 60000
 }

@@ -16,6 +16,9 @@
       "type": "object",
       "additionalProperties": { "type": "number" }
     },
+    "appType": {
+      "enum": ["", "monolith", "microservice", "public-api", "frontend", "library"]
+    },
     "ignorePaths": {
       "type": "array",
       "items": { "type": "string" }
@@ -33,6 +36,10 @@
       "items": { "type": "string" }
     },
     "performanceTargets": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "a11yTargets": {
       "type": "array",
       "items": { "type": "string" }
     },

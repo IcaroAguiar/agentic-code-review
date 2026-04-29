@@ -550,6 +550,94 @@ export function DashboardRoute() {
     },
   },
   {
+    name: "rest-api-design",
+    files: {
+      "src/orders.controller.ts": `function Get(path: string) {
+  return function noop() {};
+}
+
+function Post(path: string) {
+  return function noop() {};
+}
+
+export class OrdersController {
+  @Get("/api/delete/order")
+  deleteOrder() {
+    return { ok: true };
+  }
+
+  @Get("/orders")
+  listOrders() {
+    return prisma.order.findMany({ where: { archived: false } });
+  }
+
+  @Post("/orders")
+  createOrder() {
+    return { id: "order-1" };
+  }
+}
+`,
+    },
+    assert(output) {
+      expectIncludes(this.name, output, "rest-route-uses-verb-segment");
+      expectIncludes(this.name, output, "rest-get-mutating-action-signal");
+      expectIncludes(this.name, output, "rest-list-without-pagination-or-filter-signal");
+      expectIncludes(this.name, output, "rest-mutation-without-status-signal");
+      expectIncludes(this.name, output, "For REST/API design signals");
+    },
+  },
+  {
+    name: "ui-semantics-a11y",
+    files: {
+      "src/pages/DashboardPage.tsx": `export function DashboardPage() {
+  return (
+    <div>
+      <div><img src="/logo.png" /></div>
+      <div onClick={() => save()}>Salvar</div>
+      <input value="" onChange={() => {}} />
+      <a onClick={() => save()}>Executar</a>
+      <button href="/settings">Configuracoes</button>
+      ${Array.from({ length: 12 }, (_, index) => `<div>Item ${index}</div>`).join("\n      ")}
+    </div>
+  );
+}
+`,
+    },
+    assert(output) {
+      expectIncludes(this.name, output, "ui-image-missing-alt");
+      expectIncludes(this.name, output, "ui-input-without-label-signal");
+      expectIncludes(this.name, output, "ui-clickable-div-without-keyboard-semantics");
+      expectIncludes(this.name, output, "ui-anchor-used-as-button");
+      expectIncludes(this.name, output, "ui-button-used-as-link");
+      expectIncludes(this.name, output, "ui-page-without-semantic-landmarks");
+      expectIncludes(this.name, output, "For UI semantics/accessibility signals");
+    },
+  },
+  {
+    name: "architecture-boundaries",
+    files: {
+      "src/domain/order.ts": `import { PrismaClient } from "../infra/prisma";
+
+export class OrderPolicy {
+  constructor(private readonly prisma = new PrismaClient()) {}
+}
+`,
+      "src/components/OrdersPage.tsx": `import { prisma } from "../infra/prisma";
+
+export function OrdersPage() {
+  const orders = prisma.order.findMany();
+  return <div>{orders.length}</div>;
+}
+`,
+    },
+    assert(output) {
+      expectIncludes(this.name, output, "domain-layer-imports-outer-layer");
+      expectIncludes(this.name, output, "presentation-imports-data-layer");
+      expectIncludes(this.name, output, "ui-mixes-presentation-and-data-access");
+      expectIncludes(this.name, output, "For architecture/layering signals");
+    },
+  },
+  {
     name: "backend-boundary-without-integration",
     files: {
       "src/users.controller.ts": `export class UsersController {
@@ -568,6 +656,30 @@ test("creates user", () => {
     assert(output) {
       expectIncludes(this.name, output, "backend-boundary-without-e2e-or-integration");
       expectIncludes(this.name, output, "integration/e2e path");
+    },
+  },
+  {
+    name: "features-folder-is-production",
+    files: {
+      "src/features/dashboard/components/Panel.tsx": `export function Panel() {
+  return <div>Dashboard</div>;
+}
+`,
+    },
+    assert(output) {
+      expectNotIncludes(this.name, output, "weak-test-assertion-signal");
+      expectIncludes(this.name, output, "no-test-file-changed");
+    },
+  },
+  {
+    name: "python-any-builtin-safe",
+    files: {
+      "src/rules.py": `def has_keyword(values, keywords):
+    return any(keyword in values for keyword in keywords)
+`,
+    },
+    assert(output) {
+      expectNotIncludes(this.name, output, "unsafe-typing");
     },
   },
   {
@@ -662,6 +774,25 @@ expectIncludes("advanced-tool-selection", selectedAdvancedToolOutput, "semgrep-a
 expectNotIncludes("advanced-tool-selection", selectedAdvancedToolOutput, "autocannon");
 console.log("PASS advanced-tool-selection");
 
+const adaptiveToolRepo = createRepo("adaptive-language-tools", {
+  "pom.xml": `<project><modelVersion>4.0.0</modelVersion><groupId>x</groupId><artifactId>x</artifactId><version>1</version></project>`,
+  "src/main/java/App.java": `class App {}`,
+  "native/main.cpp": `int main() { return 0; }`,
+  "composer.json": `{"require": {}}`,
+  "src/index.php": `<?php echo "ok";`,
+  "src/App.tsx": `export function App() { return <img src="/logo.png" />; }`,
+  "eslint.config.js": `export default [];`,
+});
+const adaptiveToolOutput = collect(adaptiveToolRepo);
+expectIncludes("adaptive-language-tools", adaptiveToolOutput, "spotbugs");
+expectIncludes("adaptive-language-tools", adaptiveToolOutput, "findsecbugs");
+expectIncludes("adaptive-language-tools", adaptiveToolOutput, "cppcheck");
+expectIncludes("adaptive-language-tools", adaptiveToolOutput, "clang-tidy");
+expectIncludes("adaptive-language-tools", adaptiveToolOutput, "phpstan");
+expectIncludes("adaptive-language-tools", adaptiveToolOutput, "psalm");
+expectIncludes("adaptive-language-tools", adaptiveToolOutput, "eslint-jsx-a11y");
+console.log("PASS adaptive-language-tools");
+
 const jsonOutput = collect(historicalRepo, ["--base", historicalBase, "--head", historicalHead, "--json"]);
 const jsonPacket = JSON.parse(jsonOutput);
 if (jsonPacket.status !== "ok" || jsonPacket.crossRepoSummary.findings < 1 || !Array.isArray(jsonPacket.repositories)) {
@@ -715,6 +846,11 @@ expectIncludes("json-config-calibration", skillText, "agentic-code-review calibr
 expectIncludes("owasp-expanded-docs", skillText, "OWASP");
 expectIncludes("owasp-expanded-docs", skillText, "domainCatalogs");
 expectIncludes("owasp-expanded-docs", skillText, "zap-baseline");
+expectIncludes("web-api-architecture-docs", skillText, "REST/API design risks");
+expectIncludes("web-api-architecture-docs", skillText, "UI semantics/accessibility risks");
+expectIncludes("web-api-architecture-docs", skillText, "architecture/layering signals");
+expectIncludes("web-api-architecture-docs", skillText, "spotbugs");
+expectIncludes("web-api-architecture-docs", skillText, "appType");
 expectIncludes("browser-use-first-for-web-qa", skillText, "Web UI/browser changes, with the main agent using browser-use first");
 expectIncludes("authenticated-smoke-credentials", skillText, "do not accept \"login failed\" or \"stopped at login\" as sufficient evidence");
 expectIncludes("authenticated-smoke-credentials", skillText, "For `staging` or `prod`, it must not create credentials");
@@ -723,4 +859,4 @@ expectIncludes("authenticated-smoke-credentials", qaEvidenceText, "Credential cr
 expectNotIncludes("no-local-user-paths", skillText, "/Users/");
 console.log("PASS public-skill-contract");
 
-console.log(`PASS ${cases.length + 8}/${cases.length + 8} agentic-code-review smoke cases`);
+console.log(`PASS ${cases.length + 9}/${cases.length + 9} agentic-code-review smoke cases`);

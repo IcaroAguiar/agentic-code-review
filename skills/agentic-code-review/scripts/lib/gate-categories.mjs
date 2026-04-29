@@ -22,6 +22,12 @@ export function findingCategory(finding, isTestFile) {
     "backend-e2e-coverage-gap",
     "backend-boundary-without-e2e-or-integration",
     "static-heavy-ui-import-without-lazy-boundary",
+    "rest-route-uses-verb-segment",
+    "rest-mutation-without-status-signal",
+    "public-rest-route-without-version-signal",
+    "ui-page-without-semantic-landmarks",
+    "ui-button-used-as-link",
+    "missing-port-interface-boundary",
   ].includes(finding.rule)) {
     return "review-signal";
   }

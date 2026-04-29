@@ -10,6 +10,7 @@
     "bin",
     "skills",
     "README.md",
+    "CONTRIBUTING.md",
     "LICENSE"
   ],
   "scripts": {

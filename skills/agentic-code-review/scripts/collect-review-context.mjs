@@ -120,11 +120,13 @@ const defaultConfig = {
     highImportCount: 25,
     wideConstructorParams: 8,
   },
+  appType: "",
   ignorePaths: [],
   customQuestions: [],
   domainCatalogs: [],
   dastTargets: [],
   performanceTargets: [],
+  a11yTargets: [],
   externalToolTimeoutMs: undefined,
 };
 
@@ -144,18 +146,47 @@ function findConfigPath(root, explicitPath) {
 }
 
 function mergeConfig(base, override) {
+  const appType = override.appType || base.appType || "";
+  const adaptiveThresholds = thresholdsForAppType(appType);
   return {
     ...base,
     ...override,
     rules: { ...(base.rules || {}), ...(override.rules || {}) },
     severities: { ...(base.severities || {}), ...(override.severities || {}) },
-    thresholds: { ...(base.thresholds || {}), ...(override.thresholds || {}) },
+    appType,
+    thresholds: { ...(base.thresholds || {}), ...adaptiveThresholds, ...(override.thresholds || {}) },
     ignorePaths: [...(base.ignorePaths || []), ...(override.ignorePaths || [])],
     customQuestions: [...(base.customQuestions || []), ...(override.customQuestions || [])],
     domainCatalogs: [...(base.domainCatalogs || []), ...(override.domainCatalogs || [])],
     dastTargets: [...(base.dastTargets || []), ...(override.dastTargets || [])],
     performanceTargets: [...(base.performanceTargets || []), ...(override.performanceTargets || [])],
+    a11yTargets: [...(base.a11yTargets || []), ...(override.a11yTargets || [])],
   };
+}
+
+function thresholdsForAppType(appType) {
+  if (appType === "microservice" || appType === "public-api") {
+    return {
+      largeFileLines: 420,
+      veryLargeFileLines: 850,
+      longFunctionLines: 65,
+      veryLongFunctionLines: 120,
+      highImportCount: 22,
+      wideConstructorParams: 7,
+    };
+  }
+  if (appType === "monolith") {
+    return {
+      largeFileLines: 650,
+      veryLargeFileLines: 1200,
+      largeRefactorLines: 950,
+      longFunctionLines: 95,
+      veryLongFunctionLines: 160,
+      highImportCount: 32,
+      wideConstructorParams: 10,
+    };
+  }
+  return {};
 }
 
 function pathPatternToRegex(pattern) {
@@ -353,8 +384,10 @@ function isStructuredConfig(file) {
 }
 
 function isGeneratedOrLocalArtifact(file) {
-  return /(^|\/)(\.playwright-cli|playwright-report|test-results|coverage|dist|build)\//.test(file)
+  return /(^|\/)(\.playwright-cli|playwright-report|test-results|coverage|dist|build|__pycache__)\//.test(file)
     || /(^|\/)\.vscode\//.test(file)
+    || /(^|\/)[^/]+\.egg-info\//.test(file)
+    || /\.(pyc|pyo)$/i.test(file)
     || /(^|\/)docs\/ai\/screenshots\//.test(file)
     || /(^|\/)routeTree\.gen\.[cm]?[jt]sx?$/.test(file)
     || /(^|\/)(vendor|third[-_]party|generated)\//i.test(file)
@@ -386,7 +419,7 @@ function isPublicBoundaryFile(file) {
 }
 
 function isTest(file) {
-  return /(^|\/)(__tests__|tests?|e2e|specs?|features?)\//.test(file)
+  return /(^|\/)(__tests__|tests?|e2e|specs?)\//.test(file)
     || /\.(spec|test|e2e)\.[cm]?[tj]sx?$/.test(file)
     || /^test_.*\.py$/.test(basename(file))
     || /_test\.(py|go|exs)$/.test(basename(file))
@@ -672,7 +705,9 @@ function scanText(repo) {
       if (!trimmed || trimmed.startsWith("//") || trimmed.startsWith("*")) return;
       if (!shouldScanLine(repo, file, line)) return;
 
-      if (/\bany\b|as\s+any|unknown\s+as\s+|typing\.Any\b|interface\s*{}\s*$|map\[string\]interface\s*{}/.test(lineText)) {
+      const unsafeBroadType = /as\s+any|unknown\s+as\s+|typing\.Any\b|interface\s*{}\s*$|map\[string\]interface\s*{}/.test(lineText)
+        || (/\.[cm]?[jt]sx?$/.test(file) && /(:\s*any\b|<any>|Array<any>|Promise<any>|Record<[^>]*any|any\[\])/.test(lineText));
+      if (unsafeBroadType) {
         addFinding(findings, "unsafe-typing", isTest(file) ? "low" : "medium", repo.name, file, line, lineText, "Validate and narrow at the boundary instead of using unsafe or overly broad types.");
       }
 
@@ -1385,6 +1420,151 @@ function scanFrameworkSpecific(repo) {
   return findings;
 }
 
+function scanRestApiDesign(repo) {
+  const findings = [];
+  const routeFilePattern = /(controller|route|routes|router|handler|api)\.[cm]?[jt]sx?$|(^|\/)(controllers?|routes?|api|handlers?)\//i;
+  const methodPattern = /\b(app|router|server)\.(get|post|put|patch|delete)\s*\(\s*["'`]([^"'`]+)["'`]|@(Get|Post|Put|Patch|Delete)\s*\(\s*["'`]([^"'`]*)["'`]\s*\)/g;
+  const verbSegment = /\b(get|create|add|update|edit|delete|remove|fetch|list|search|approve|reject|send|process|calculate|generate|sync|export|import)\b/i;
+
+  for (const file of existingFiles(repo.root, repo.entries).filter((value) => isCode(value) && !isTest(value) && routeFilePattern.test(value))) {
+    if (changedLineCount(repo, file) === 0) continue;
+    const text = readFile(repo.root, file);
+    const lines = text.split(/\r?\n/);
+
+    for (const match of text.matchAll(methodPattern)) {
+      const method = (match[2] || match[4] || "").toLowerCase();
+      const path = match[3] || match[5] || "";
+      const line = lineForFirstOccurrence(text, match[0]);
+      if (!windowTouchesChangedLine(repo, file, line === "-" ? 1 : line, 4)) continue;
+      const fullPath = path || "/";
+      const segments = fullPath.split("/").filter(Boolean);
+      const lastSegment = segments.at(-1) || "";
+      const window = lines.slice(Math.max(0, Number(line) - 2 || 0), Math.min(lines.length, (Number(line) || 1) + 10)).join("\n");
+
+      if (segments.some((segment) => verbSegment.test(segment.replace(/[:{}]/g, "")))) {
+        addFinding(
+          findings,
+          "rest-route-uses-verb-segment",
+          "low",
+          repo.name,
+          file,
+          line,
+          `${method.toUpperCase()} ${fullPath}`,
+          "Prefer resource nouns in REST paths. Put the action semantics in the HTTP method or model it as a sub-resource when needed."
+        );
+      }
+
+      if (method === "get" && /\b(create|update|delete|remove|approve|reject|send|process|sync)\b/i.test(fullPath)) {
+        addFinding(
+          findings,
+          "rest-get-mutating-action-signal",
+          "medium",
+          repo.name,
+          file,
+          line,
+          `${method.toUpperCase()} ${fullPath}`,
+          "GET routes should be safe/idempotent. Use POST/PATCH/DELETE for mutations and add CSRF/auth/rate-limit checks when browser-exposed."
+        );
+      }
+
+      if ((method === "post" || method === "put" || method === "patch") && !/\b(status|code|201|202|204|HttpCode|Created|NoContent|accepted|created)\b/i.test(window)) {
+        addFinding(
+          findings,
+          "rest-mutation-without-status-signal",
+          "low",
+          repo.name,
+          file,
+          line,
+          `${method.toUpperCase()} ${fullPath}`,
+          "Mutation endpoints should make success status semantics explicit: 201 for create, 202 for async, 204 for no-content updates/deletes, or documented alternatives."
+        );
+      }
+
+      if ((method === "get" && (lastSegment === "" || !/[:{]/.test(lastSegment))) && /\b(findMany|findAll|list|paginate|where|query)\b/i.test(window) && !/\b(limit|take|page|cursor|offset|perPage|pageSize|filter|sort|orderBy)\b/i.test(window)) {
+        addFinding(
+          findings,
+          "rest-list-without-pagination-or-filter-signal",
+          "medium",
+          repo.name,
+          file,
+          line,
+          `${method.toUpperCase()} ${fullPath}`,
+          "Collection endpoints should expose explicit pagination and filtering/sorting contracts or document bounded result size."
+        );
+      }
+
+      if (/^\/?(api\/)?(v\d+)\b/i.test(fullPath) === false && /(public|external|client|api)/i.test(file + "\n" + text.slice(0, 800))) {
+        addFinding(
+          findings,
+          "public-rest-route-without-version-signal",
+          "low",
+          repo.name,
+          file,
+          line,
+          `${method.toUpperCase()} ${fullPath}`,
+          "Public APIs should have a versioning strategy, either in the path/header/media type or documented at the router boundary."
+        );
+      }
+    }
+  }
+
+  return findings;
+}
+
+function scanUiSemanticsAndA11y(repo) {
+  const findings = [];
+  const uiFilePattern = /\.(tsx|jsx|vue|svelte|astro|html)$/i;
+
+  for (const file of existingFiles(repo.root, repo.entries).filter((value) => uiFilePattern.test(value) && !isTest(value))) {
+    if (changedLineCount(repo, file) === 0) continue;
+    const text = readFile(repo.root, file);
+    const lines = text.split(/\r?\n/);
+
+    lines.forEach((lineText, index) => {
+      const line = index + 1;
+      if (!shouldScanLine(repo, file, line)) return;
+      const window = lines.slice(index, Math.min(index + 5, lines.length)).join("\n");
+
+      if (/<img\b/i.test(lineText) && !/\b(alt=|role=["']presentation|aria-hidden=["']true)/i.test(window)) {
+        addFinding(findings, "ui-image-missing-alt", "medium", repo.name, file, line, window, "Images need alt text or explicit decorative semantics with role=presentation/aria-hidden.");
+      }
+
+      if (/<input\b/i.test(lineText) && !/\b(id=|aria-label=|aria-labelledby=|title=)/i.test(window) && !/<label\b/i.test(lines.slice(Math.max(0, index - 3), index + 4).join("\n"))) {
+        addFinding(findings, "ui-input-without-label-signal", "medium", repo.name, file, line, window, "Inputs should have a programmatic label via label+id, aria-label, or aria-labelledby.");
+      }
+
+      if (/<div\b[^>]*(onClick|@click|v-on:click)\b/i.test(lineText) && !/\b(role=["']button|tabIndex=|tabindex=|onKeyDown|onKeyUp|@keydown)/i.test(window)) {
+        addFinding(findings, "ui-clickable-div-without-keyboard-semantics", "medium", repo.name, file, line, window, "Use a real button for actions, or provide role, focusability, and keyboard handlers when a custom element is required.");
+      }
+
+      if (/<a\b/i.test(lineText) && /\b(onClick|@click)\b/i.test(lineText) && !/\bhref=/.test(lineText)) {
+        addFinding(findings, "ui-anchor-used-as-button", "medium", repo.name, file, line, lineText, "Use <button> for actions and <a href> for navigation.");
+      }
+
+      if (/<button\b/i.test(lineText) && /\b(to=|href=|routerLink=)/i.test(lineText)) {
+        addFinding(findings, "ui-button-used-as-link", "low", repo.name, file, line, lineText, "Use links for navigation and buttons for actions unless the design system wraps semantics correctly.");
+      }
+    });
+
+    const semanticTags = (text.match(/<(header|nav|main|section|article|aside|footer)\b/gi) || []).length;
+    const divTags = (text.match(/<div\b/gi) || []).length;
+    if (divTags >= 12 && semanticTags === 0 && /(page|layout|screen|route|view|dashboard|shell)/i.test(file)) {
+      addFinding(
+        findings,
+        "ui-page-without-semantic-landmarks",
+        "low",
+        repo.name,
+        file,
+        "-",
+        `${divTags} div elements and no semantic landmarks detected`,
+        "Page/layout components should prefer semantic landmarks such as header, nav, main, section, article, aside, or footer where appropriate."
+      );
+    }
+  }
+
+  return findings;
+}
+
 function scanPublicContractIntegrity(repo) {
   const findings = [];
   const publicTypeNamePattern = /(Public|External|Client|Response|Resource|Dto|DTO|ViewModel|View)/;
@@ -1719,6 +1899,84 @@ function scanCouplingAndComplexity(repo) {
   return findings;
 }
 
+function scanArchitectureBoundaries(repo) {
+  const findings = [];
+  const files = existingFiles(repo.root, repo.entries).filter((value) => isCode(value) && !isTest(value));
+  const changedCodeFiles = files.filter((file) => changedLineCount(repo, file) > 0);
+
+  for (const file of changedCodeFiles) {
+    const text = readFile(repo.root, file);
+    const imports = [...javascriptImportedModules(text)];
+    const layer = layerForFile(file);
+
+    for (const imported of imports) {
+      if (!imported.startsWith(".") && !imported.startsWith("@/") && !imported.startsWith("~/")) continue;
+      if (layer === "domain" && /(infra|infrastructure|persistence|repository|controller|http|react|vue|component|express|nestjs|prisma|typeorm|sequelize)/i.test(imported)) {
+        addFinding(
+          findings,
+          "domain-layer-imports-outer-layer",
+          "medium",
+          repo.name,
+          file,
+          lineForFirstOccurrence(text, imported),
+          imported,
+          "Domain code should not depend on presentation, infrastructure, ORM, or framework layers. Invert dependencies through interfaces/ports."
+        );
+      }
+      if (layer === "presentation" && /(prisma|typeorm|sequelize|mongoose|sql|repository|persistence|infra)/i.test(imported)) {
+        addFinding(
+          findings,
+          "presentation-imports-data-layer",
+          "medium",
+          repo.name,
+          file,
+          lineForFirstOccurrence(text, imported),
+          imported,
+          "Presentation/controllers/components should call application/use-case boundaries, not data/persistence adapters directly."
+        );
+      }
+    }
+
+    if (/(service|use-case|usecase|handler|controller)\b/i.test(file)
+      && /\b(new\s+[A-Z][A-Za-z0-9_]*Repository|PrismaClient|createConnection|mongoose\.connect|DataSource\()/i.test(text)
+      && !/\b(interface|abstract class|Port|RepositoryPort|inject|constructor)\b/i.test(text.slice(0, 1600))) {
+      addFinding(
+        findings,
+        "missing-port-interface-boundary",
+        "low",
+        repo.name,
+        file,
+        lineForFirstOccurrence(text, "Repository"),
+        "Service/use-case code appears to instantiate concrete data access directly.",
+        "Depend on interfaces/ports at application boundaries so infrastructure can vary and tests can exercise behavior without concrete persistence coupling."
+      );
+    }
+
+    if (/\b(render|return\s*<|JSX|template)\b/i.test(text) && /\b(fetch|axios|prisma|repository|sql|save|update|delete)\b/i.test(text) && /(component|page|view|screen|route)\b/i.test(file)) {
+      addFinding(
+        findings,
+        "ui-mixes-presentation-and-data-access",
+        "medium",
+        repo.name,
+        file,
+        "-",
+        "UI component appears to mix rendering with direct data access or mutation.",
+        "Separate presentation from data fetching/mutation through hooks, loaders, actions, services, or application boundaries."
+      );
+    }
+  }
+
+  return findings;
+}
+
+function layerForFile(file) {
+  if (/(^|\/)(domain|entities|value-objects|policies)\//i.test(file)) return "domain";
+  if (/(^|\/)(presentation|controllers?|routes?|views?|components?|pages?|screens?)\//i.test(file)) return "presentation";
+  if (/(^|\/)(infrastructure|infra|persistence|repositories?|adapters?)\//i.test(file)) return "infrastructure";
+  if (/(^|\/)(application|use-cases?|services?|commands?|queries?)\//i.test(file)) return "application";
+  return "unknown";
+}
+
 function reviewQuestionsForRepo(repo, findings) {
   const questions = [];
   const rules = new Set(findings.map((finding) => finding.rule));
@@ -1764,6 +2022,18 @@ function reviewQuestionsForRepo(repo, findings) {
 
   if (rules.has("retry-without-backoff-or-timeout") || rules.has("shared-state-without-lock-signal")) {
     questions.push("Há expectativa de concorrência, carga, filas ou reprocessamento que exige teste de race/idempotência/backoff antes de aprovar?");
+  }
+
+  if (rules.has("rest-route-uses-verb-segment") || rules.has("rest-get-mutating-action-signal") || rules.has("rest-list-without-pagination-or-filter-signal") || rules.has("public-rest-route-without-version-signal")) {
+    questions.push("A API alterada segue o contrato público esperado para recursos REST, versionamento, paginação/filtros, status codes e compatibilidade OpenAPI/cliente?");
+  }
+
+  if (rules.has("domain-layer-imports-outer-layer") || rules.has("presentation-imports-data-layer") || rules.has("missing-port-interface-boundary") || rules.has("ui-mixes-presentation-and-data-access")) {
+    questions.push("A separação entre apresentação, aplicação/domínio e dados faz parte do escopo desta entrega, ou há uma restrição explícita para aceitar acoplamento temporário?");
+  }
+
+  if (rules.has("ui-page-without-semantic-landmarks") || rules.has("ui-image-missing-alt") || rules.has("ui-input-without-label-signal") || rules.has("ui-clickable-div-without-keyboard-semantics") || rules.has("ui-anchor-used-as-button") || rules.has("ui-button-used-as-link")) {
+    questions.push("A tela/componente alterado precisa cumprir semântica HTML e acessibilidade como critério bloqueante nesta PR, incluindo landmarks, labels, navegação por teclado e distinção button/link?");
   }
 
   const catalogQuestions = domainQuestions(repo.config.domainCatalogs || [], domains, files);
@@ -1816,12 +2086,24 @@ function runtimeVerificationRequirementsForRepo(repo, findings, repositoryCount)
     requirements.push("For changed service/controller/handler/repository/hook boundaries, prove the boundary through a focused unit/integration/e2e path or explain why the exact path cannot run.");
   }
 
+  if (rules.has("rest-route-uses-verb-segment") || rules.has("rest-get-mutating-action-signal") || rules.has("rest-mutation-without-status-signal") || rules.has("rest-list-without-pagination-or-filter-signal") || rules.has("public-rest-route-without-version-signal")) {
+    requirements.push("For REST/API design signals, exercise the real route/controller/handler contract, including status code, method semantics, pagination/filter behavior, and OpenAPI/client compatibility when public.");
+  }
+
   if (repositoryCount > 1 || contractFiles.length > 0) {
     requirements.push("For cross-repo or contract/schema/API/client changes, run producer and consumer compatibility checks or contract tests across every touched repository.");
   }
 
   if (uiFiles.length > 0) {
     requirements.push("For web UI/browser changes, the main agent must run a human-like browser-use pass through the changed flow and capture screenshot/interaction evidence. If no browser-use session is exposed, load the Browser skill, discover the Node REPL js tool if needed, bootstrap the iab runtime, and open a new browser-use tab/session before fallback. Use computer-use only for desktop/native/local-app validation, OS/browser shell behavior, or documented failed browser-use bootstrap/open attempt. Escalate to a QA subagent only after main-agent evidence when independent or matrix QA is justified.");
+  }
+
+  if (rules.has("ui-page-without-semantic-landmarks") || rules.has("ui-image-missing-alt") || rules.has("ui-input-without-label-signal") || rules.has("ui-clickable-div-without-keyboard-semantics") || rules.has("ui-anchor-used-as-button") || rules.has("ui-button-used-as-link")) {
+    requirements.push("For UI semantics/accessibility signals, validate the rendered component/page with browser-use plus a semantic/a11y check such as axe, eslint-plugin-jsx-a11y, Testing Library role queries, or equivalent framework-native assertions.");
+  }
+
+  if (rules.has("domain-layer-imports-outer-layer") || rules.has("presentation-imports-data-layer") || rules.has("missing-port-interface-boundary") || rules.has("ui-mixes-presentation-and-data-access")) {
+    requirements.push("For architecture/layering signals, prove the refactored or accepted boundary through tests at the intended layer and ensure runtime behavior still flows through the public entrypoint rather than a copied implementation.");
   }
 
   if (rules.has("possible-n-plus-one-query") || rules.has("parallel-n-plus-one-query") || rules.has("sequential-query-in-loop")) {
@@ -2184,12 +2466,12 @@ const repos = buildRepos();
 
 if (repos.length === 0) {
   if (args.json) {
-    console.log(JSON.stringify({
+    process.stdout.write(`${JSON.stringify({
       status: "no-changed-repositories",
       startDirectory: startCwd,
       configPath: startConfigPath || null,
       repositories: [],
-    }, null, 2));
+    }, null, 2)}\n`);
     process.exit(2);
   }
   console.log("# Agentic Code Review Packet");
@@ -2217,10 +2499,13 @@ for (const repo of repos) {
     ...scanWebAndRuntimeSecurity(repo),
     ...scanUnboundedDataAccess(repo),
     ...scanFrameworkSpecific(repo),
+    ...scanRestApiDesign(repo),
+    ...scanUiSemanticsAndA11y(repo),
     ...scanPublicContractIntegrity(repo),
     ...scanConfigValidationIntegrity(repo),
     ...scanBundleSplitRisks(repo),
     ...scanCouplingAndComplexity(repo),
+    ...scanArchitectureBoundaries(repo),
     ...scanTests(repo),
     ...scanBackendCoverage(repo),
     ...scanCrossRepoContracts(repo, repos.length),
@@ -2316,7 +2601,7 @@ const packet = {
 };
 
 if (args.json) {
-  console.log(JSON.stringify(packet, null, 2));
+  process.stdout.write(`${JSON.stringify(packet, null, 2)}\n`);
   process.exit(0);
 }
 
