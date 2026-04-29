@@ -1,0 +1,68 @@
+{
+  "referenceDate": "2026-04-28",
+  "policy": {
+    "requiredByDefault": false,
+    "downloadExecution": "opt-in only with --allow-tool-downloads",
+    "reviewUse": "additive evidence; verify findings against code before reporting",
+    "timeout": "controlled by --external-tool-timeout-ms"
+  },
+  "tools": [
+    {
+      "name": "gitleaks",
+      "recommendedVersion": "8.30.1",
+      "purpose": "secret scanning",
+      "preferredInstall": "brew install gitleaks",
+      "collectorName": "gitleaks",
+      "source": "https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1"
+    },
+    {
+      "name": "semgrep",
+      "recommendedVersion": "1.160.0",
+      "purpose": "security and code-smell pattern scanning",
+      "preferredInstall": "brew install semgrep",
+      "fallbackInstall": "uv tool install semgrep",
+      "collectorName": "semgrep",
+      "source": "https://github.com/semgrep/semgrep/releases/tag/v1.160.0"
+    },
+    {
+      "name": "jscpd",
+      "recommendedVersion": "4.0.5",
+      "purpose": "copy-paste and structural duplication",
+      "preferredInstall": "npm install -g jscpd@4.0.5",
+      "collectorName": "jscpd",
+      "source": "https://www.npmjs.com/package/jscpd"
+    },
+    {
+      "name": "lizard",
+      "recommendedVersion": "1.21.3",
+      "purpose": "cyclomatic complexity and long functions",
+      "preferredInstall": "uv tool install lizard==1.21.3",
+      "collectorName": "lizard",
+      "source": "https://pypi.org/project/lizard/1.21.3/"
+    },
+    {
+      "name": "dependency-cruiser",
+      "recommendedVersion": "17.0.1",
+      "purpose": "JavaScript/TypeScript dependency boundaries and cycles",
+      "preferredInstall": "npm install -g dependency-cruiser@17.0.1",
+      "collectorName": "dependency-cruiser",
+      "source": "https://www.npmjs.com/package/dependency-cruiser/v/17.0.1"
+    },
+    {
+      "name": "madge",
+      "recommendedVersion": "8.0.0",
+      "purpose": "JavaScript/TypeScript circular dependencies",
+      "preferredInstall": "npm install -g madge@8.0.0",
+      "collectorName": "madge",
+      "source": "https://www.npmjs.com/package/madge/v/8.0.0"
+    },
+    {
+      "name": "osv-scanner",
+      "recommendedVersion": "2.3.5",
+      "purpose": "dependency vulnerability scanning",
+      "preferredInstall": "brew install osv-scanner",
+      "collectorName": "osv-scanner",
+      "source": "https://github.com/google/osv-scanner/releases"
+    }
+  ]
+}

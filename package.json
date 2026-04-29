@@ -1,0 +1,32 @@
+{
+  "name": "agentic-code-review",
+  "version": "0.1.0",
+  "description": "Agentic code review skill and deterministic review tooling for AI-generated code.",
+  "type": "module",
+  "bin": {
+    "agentic-code-review": "./bin/agentic-code-review.mjs"
+  },
+  "files": [
+    "bin",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "smoke": "node skills/agentic-code-review/scripts/smoke-review-toolbelt.mjs",
+    "collect": "node skills/agentic-code-review/scripts/collect-review-context.mjs"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "code-review",
+    "codex",
+    "skills",
+    "static-analysis",
+    "review-gate"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  }
+}
