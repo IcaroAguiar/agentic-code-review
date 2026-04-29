@@ -24,6 +24,18 @@
       "type": "array",
       "items": { "type": "string" }
     },
+    "domainCatalogs": {
+      "type": "array",
+      "items": { "enum": ["lgpd", "privacy", "finance", "financial", "health"] }
+    },
+    "dastTargets": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "performanceTargets": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
     "externalToolTimeoutMs": {
       "type": "number",
       "minimum": 1000

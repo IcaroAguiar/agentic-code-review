@@ -30,6 +30,12 @@ agentic-code-review/
         contract-compatibility-test.vitest.ts
         security-boundary-test.vitest.ts
         performance-budget-test.vitest.ts
+        auth-authorization-boundary-test.vitest.ts
+        rate-limit-boundary-test.vitest.ts
+        upload-security-test.vitest.ts
+        session-cookie-security-test.vitest.ts
+        crypto-security-test.vitest.ts
+        domain-question-catalogs.json
         n-plus-one-query-test.vitest.ts
         concurrency-test.vitest.ts
         idempotency-test.vitest.ts
@@ -177,6 +183,9 @@ Supported fields:
 - `thresholds`: tune file size, function length, import count, refactor, and constructor-width thresholds.
 - `ignorePaths`: ignore generated or project-specific paths using simple glob-like patterns.
 - `customQuestions`: add project/business checkpoints to every packet.
+- `domainCatalogs`: add built-in LGPD/privacy, finance, or health review checkpoints.
+- `dastTargets`: staging URLs for explicit OWASP ZAP baseline scans.
+- `performanceTargets`: URLs for explicit `autocannon`/`wrk` load smoke runs.
 - `externalToolTimeoutMs`: set the default optional tool timeout for that repository.
 
 ### `agentic-code-review calibrate`
@@ -200,7 +209,7 @@ npx agentic-code-review smoke
 
 The smoke suite creates temporary Git repositories under `/private/tmp/agentic-code-review-smoke` and verifies scanner behavior for core cases such as SQL injection, N+1, unbounded list queries, patch semantics, public contract leaks, UI token validation, large-file signals, cross-repo contracts, historical `--base/--head` ranges, and optional tool selection.
 
-It also validates JSON output, project config behavior, and generic web/runtime security signals such as unsafe HTML sinks, command injection, path traversal, and sensitive-data logging.
+It also validates JSON output, project config behavior, domain catalogs, and generic web/runtime/OWASP security signals such as unsafe HTML sinks, command injection, path traversal, weak crypto, permissive CORS, unsafe cookies, SSRF, open redirects, uploads, webhook signatures, retry/backoff gaps, and sensitive-data logging.
 
 ## The Skill
 

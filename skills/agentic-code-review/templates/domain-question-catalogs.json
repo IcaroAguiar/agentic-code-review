@@ -1,0 +1,17 @@
+{
+  "lgpd": [
+    "A mudanca minimiza coleta e exposicao de dados pessoais?",
+    "Logs, eventos, traces e respostas removem CPF, email, telefone, endereco e tokens?",
+    "Retencao, consentimento/base legal e anonimização continuam preservados?"
+  ],
+  "finance": [
+    "Valores financeiros usam tipos precisos e regras de arredondamento explicitas?",
+    "Operacoes com dinheiro sao idempotentes e auditaveis?",
+    "Reprocessamento, duplicidade e reconciliacao foram testados?"
+  ],
+  "health": [
+    "Dados clinicos seguem acesso minimo e auditoria de acesso sensivel?",
+    "Consentimento e finalidade de uso seguem preservados?",
+    "Exports, notificacoes e logs evitam informacao medica identificavel?"
+  ]
+}

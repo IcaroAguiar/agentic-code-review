@@ -122,6 +122,9 @@ const defaultConfig = {
   },
   ignorePaths: [],
   customQuestions: [],
+  domainCatalogs: [],
+  dastTargets: [],
+  performanceTargets: [],
   externalToolTimeoutMs: undefined,
 };
 
@@ -149,6 +152,9 @@ function mergeConfig(base, override) {
     thresholds: { ...(base.thresholds || {}), ...(override.thresholds || {}) },
     ignorePaths: [...(base.ignorePaths || []), ...(override.ignorePaths || [])],
     customQuestions: [...(base.customQuestions || []), ...(override.customQuestions || [])],
+    domainCatalogs: [...(base.domainCatalogs || []), ...(override.domainCatalogs || [])],
+    dastTargets: [...(base.dastTargets || []), ...(override.dastTargets || [])],
+    performanceTargets: [...(base.performanceTargets || []), ...(override.performanceTargets || [])],
   };
 }
 
@@ -350,6 +356,7 @@ function isGeneratedOrLocalArtifact(file) {
   return /(^|\/)(\.playwright-cli|playwright-report|test-results|coverage|dist|build)\//.test(file)
     || /(^|\/)\.vscode\//.test(file)
     || /(^|\/)docs\/ai\/screenshots\//.test(file)
+    || /(^|\/)routeTree\.gen\.[cm]?[jt]sx?$/.test(file)
     || /(^|\/)(vendor|third[-_]party|generated)\//i.test(file)
     || /\.(min|bundle)\.[cm]?[jt]sx?$/i.test(file)
     || /(^|\/)pdf(\.|js|js-dist|worker)/i.test(file);
@@ -398,7 +405,29 @@ function addFinding(findings, rule, severity, repo, file, line, text, suggestion
     line,
     text: String(text || "").trim().slice(0, 260),
     suggestion,
+    domain: classifyDomain(file, text),
+    importance: classifyImportance(rule, severity, file, text),
   });
+}
+
+function classifyDomain(file, text = "") {
+  const value = `${file}\n${text}`;
+  if (/\b(auth|login|session|cookie|csrf|jwt|oauth|sso|mfa|password|credential|permission|rbac|role|policy|guard)\b/i.test(value)) return "auth";
+  if (/\b(payment|billing|invoice|creditCard|card|pix|bank|ledger|transaction|finance|amount|price|refund)\b/i.test(value)) return "financial";
+  if (/\b(patient|health|medical|diagnosis|clinic|hipaa|lab|prescription)\b/i.test(value)) return "health";
+  if (/\b(cpf|cnpj|lgpd|privacy|consent|personalData|pii|email|phone|address|birth)\b/i.test(value)) return "privacy";
+  if (/\b(upload|file|storage|bucket|s3|blob|attachment|media)\b/i.test(value)) return "file-storage";
+  if (/\b(webhook|callback|redirect|url|http|fetch|axios|request)\b/i.test(value)) return "integration";
+  if (/\b(tenant|organization|orgUnit|workspace|account)\b/i.test(value)) return "multi-tenant";
+  return "general";
+}
+
+function classifyImportance(rule, severity, file, text = "") {
+  if (severity === "high") return "high";
+  if (/auth|financial|privacy|multi-tenant/.test(classifyDomain(file, text))) return severity === "medium" ? "high" : "medium";
+  if (/injection|xss|csrf|ssrf|redirect|crypto|cookie|upload|webhook|secret|rate-limit/i.test(rule)) return "high";
+  if (severity === "medium") return "medium";
+  return "low";
 }
 
 function shouldScanLine(repo, file, line) {
@@ -1091,6 +1120,194 @@ function scanWebAndRuntimeSecurity(repo) {
           "Do not log credentials, tokens, cookies, or secrets unless they are explicitly redacted before logging."
         );
       }
+
+      if (/\b(MD5|SHA1|sha1|md5|createHash\s*\(\s*["'`](md5|sha1)|hashlib\.(md5|sha1)|MessageDigest\.getInstance\s*\(\s*["'`](MD5|SHA-?1))/i.test(lineText)
+        && !/\b(non[-_ ]security|checksum|etag|cache|dedupe|fingerprint|legacy compatibility)\b/i.test(window)) {
+        addFinding(
+          findings,
+          "weak-cryptographic-hash",
+          "high",
+          repo.name,
+          file,
+          line,
+          window,
+          "Do not use MD5/SHA-1 for security-sensitive hashing. Use a modern password KDF or SHA-256+ only for non-password integrity with explicit non-security rationale."
+        );
+      }
+
+      if (/\b(createCipher\s*\(|DES|3DES|RC4|ECB|AES-?ECB|NoPadding)\b|Cipher\.getInstance\s*\(\s*["'`][^"'`]*(DES|RC4|ECB|NoPadding)/i.test(lineText)) {
+        addFinding(
+          findings,
+          "insecure-crypto-algorithm-or-mode",
+          "high",
+          repo.name,
+          file,
+          line,
+          window,
+          "Use authenticated encryption such as AES-GCM/ChaCha20-Poly1305 and avoid deprecated algorithms, ECB mode, and legacy createCipher APIs."
+        );
+      }
+
+      if (/\b(password|passwd)\b/i.test(window)
+        && /\b(hash|digest|createHash|bcrypt|scrypt|argon2|pbkdf2)\b/i.test(window)
+        && !/\b(salt|argon2|bcrypt|scrypt|pbkdf2)\b/i.test(window)) {
+        addFinding(
+          findings,
+          "password-hash-without-salt-or-kdf",
+          "high",
+          repo.name,
+          file,
+          line,
+          window,
+          "Password storage should use a salted adaptive KDF such as Argon2id, bcrypt, scrypt, or PBKDF2 with explicit parameters."
+        );
+      }
+
+      if (/["'`]http:\/\/(?!localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])[^"'`]+["'`]/i.test(lineText)) {
+        addFinding(
+          findings,
+          "insecure-http-url",
+          "medium",
+          repo.name,
+          file,
+          line,
+          lineText,
+          "Use HTTPS for external communication, or document why this endpoint is strictly internal/test-only and protected."
+        );
+      }
+
+      if (/(Access-Control-Allow-Origin|cors\s*\(|origin\s*:)\s*["'`*]/i.test(lineText)
+        || /origin\s*:\s*(true|\*)/i.test(window)) {
+        addFinding(
+          findings,
+          "permissive-cors-policy",
+          "high",
+          repo.name,
+          file,
+          line,
+          window,
+          "Avoid wildcard/reflected CORS. Use an allowlist per environment and ensure credentials are not enabled for broad origins."
+        );
+      }
+
+      if (/(setCookie|cookie\s*\(|res\.cookie|Set-Cookie|cookies\.set)/.test(lineText)
+        && !/\b(SameSite|sameSite|secure\s*:\s*true|httpOnly\s*:\s*true|HttpOnly|Secure)\b/.test(window)) {
+        addFinding(
+          findings,
+          "cookie-missing-security-attributes",
+          "high",
+          repo.name,
+          file,
+          line,
+          window,
+          "Session/auth cookies should set HttpOnly, Secure, and SameSite with an explicit policy unless this is a documented non-browser cookie."
+        );
+      }
+
+      if (/\bredirect\s*\(|res\.redirect|router\.push|navigate\s*\(|window\.location|location\.href/.test(lineText)
+        && /\b(req\.|request\.|params|query|body|next|url|redirect|returnTo|callback)\b/.test(window)
+        && !/\b(allowlist|whitelist|safeRedirect|validateRedirect|sameOrigin|new URL\(|URLPattern)\b/i.test(window)) {
+        addFinding(
+          findings,
+          "open-redirect-risk",
+          "high",
+          repo.name,
+          file,
+          line,
+          window,
+          "Validate redirects with a same-origin or explicit allowlist helper before using user-controlled URLs."
+        );
+      }
+
+      if (/\b(fetch|axios|request|http\.get|http\.request|urllib|requests\.get|Net::HTTP|Faraday)\s*\(/.test(lineText)
+        && /\b(req\.|request\.|params|query|body|input|url|uri|callback|webhook)\b/.test(window)
+        && !/\b(allowlist|whitelist|validateUrl|safeUrl|blockPrivate|isPrivateIp|URLPattern|sameOrigin)\b/i.test(window)) {
+        addFinding(
+          findings,
+          "ssrf-risk-unvalidated-url-fetch",
+          "high",
+          repo.name,
+          file,
+          line,
+          window,
+          "Validate outbound URLs with scheme/host allowlists and private-network blocking before fetching user-controlled locations."
+        );
+      }
+
+      if (/\b(multer|busboy|formidable|multipart|upload|fileUpload|UploadedFile|IFormFile|MultipartFile)\b/i.test(window)
+        && !/\b(fileFilter|mime|mimetype|contentType|extension|size|limit|sanitize|safeOriginalName|assertSafePath|basename|virus|scan|allowlist|storage)\b/i.test(window)) {
+        addFinding(
+          findings,
+          "file-upload-without-validation",
+          "high",
+          repo.name,
+          file,
+          line,
+          window,
+          "Uploads need size limits, MIME/extension allowlists, filename sanitization, safe storage, and malware scanning when appropriate."
+        );
+      }
+
+      if (/\b(webhook|stripe|github|slack|callback)\b/i.test(window)
+        && /\b(post|handler|controller|route|receive|payload|body)\b/i.test(window)
+        && !/\b(signature|verify|hmac|timingSafeEqual|constructEvent|webhookSecret)\b/i.test(window)) {
+        addFinding(
+          findings,
+          "webhook-without-signature-verification",
+          "high",
+          repo.name,
+          file,
+          line,
+          window,
+          "Webhook endpoints should verify provider signatures/HMAC before trusting payload content."
+        );
+      }
+
+      if (/\b(login|password|otp|mfa|resetPassword|forgotPassword|token|session)\b/i.test(window)
+        && /\b(Post|post|router\.|controller|handler|route|mutation)\b/i.test(window)
+        && !/\b(rateLimit|throttle|slowDown|brute|lockout|captcha|attempt)\b/i.test(window)) {
+        addFinding(
+          findings,
+          "auth-boundary-without-rate-limit-signal",
+          "medium",
+          repo.name,
+          file,
+          line,
+          window,
+          "Authentication-sensitive endpoints should have rate limiting, throttling, lockout, or brute-force controls at the route or gateway boundary."
+        );
+      }
+
+      if (/\b(retry|retries|while\s*\(|for\s*\(|setInterval|poll)\b/i.test(window)
+        && /\b(fetch|axios|request|http|queue|job|publish|send|client\.)\b/i.test(window)
+        && !/\b(backoff|jitter|exponential|timeout|circuitBreaker|retryAfter|maxAttempts)\b/i.test(window)) {
+        addFinding(
+          findings,
+          "retry-without-backoff-or-timeout",
+          "medium",
+          repo.name,
+          file,
+          line,
+          window,
+          "Retries/polling around network or queue calls should include bounded attempts, timeout, backoff, and jitter to avoid thundering-herd failures."
+        );
+      }
+
+      if (/\b(global|static|singleton|cache|Map|Set|dict|list|array|var\s+|let\s+)\b/i.test(window)
+        && /\b(push|set\s*\(|delete\s*\(|clear\s*\(|append|extend|\+\+|--|\+=|-=)\b/.test(window)
+        && /\b(async|await|Promise\.all|goroutine|go\s+func|thread|Thread|Task|parallel|concurrent|worker)\b/i.test(text)
+        && !/\b(mutex|lock|synchronized|atomic|semaphore|queue|channel|Concurrent|RWMutex|sync\.|threading\.Lock)\b/i.test(window)) {
+        addFinding(
+          findings,
+          "shared-state-without-lock-signal",
+          "medium",
+          repo.name,
+          file,
+          line,
+          window,
+          "Changed code mutates shared state in a concurrent/async context without an obvious lock, queue, atomic primitive, or single-writer boundary."
+        );
+      }
     });
   }
   return findings;
@@ -1507,6 +1724,7 @@ function reviewQuestionsForRepo(repo, findings) {
   const rules = new Set(findings.map((finding) => finding.rule));
   const files = repo.entries.map((entry) => entry.path);
   const magicStringCount = findings.filter((finding) => finding.rule === "magic-string").length;
+  const domains = new Set(findings.map((finding) => finding.domain).filter(Boolean));
 
   if (rules.has("single-responsibility-refactor-gate") || rules.has("large-file-touched") || rules.has("multiple-responsibilities-in-large-file")) {
     questions.push("O escopo desta tarefa permite refatorar o arquivo grande agora, ou a revisão deve registrar a extração como follow-up explícito?");
@@ -1532,7 +1750,43 @@ function reviewQuestionsForRepo(repo, findings) {
     questions.push("Há contrato cross-repo ou consumidor externo que precisa de compatibilidade/migração antes de aprovar?");
   }
 
-  return [...new Set([...questions, ...(repo.config.customQuestions || [])])];
+  if (rules.has("weak-cryptographic-hash") || rules.has("insecure-crypto-algorithm-or-mode") || rules.has("password-hash-without-salt-or-kdf")) {
+    questions.push("A mudança manipula dados sensíveis que exigem criptografia moderna, rotação de chaves, KMS/cofre ou migração de hashes legados?");
+  }
+
+  if (rules.has("ssrf-risk-unvalidated-url-fetch") || rules.has("open-redirect-risk") || rules.has("permissive-cors-policy") || rules.has("cookie-missing-security-attributes")) {
+    questions.push("A superfície web/integracao exposta tem allowlist de origem/URL, proteção de cookies e testes negativos para entrada externa maliciosa?");
+  }
+
+  if (rules.has("file-upload-without-validation")) {
+    questions.push("O fluxo de upload exige limites de tamanho, allowlist de tipo, sanitização de nome, armazenamento isolado ou varredura antimalware?");
+  }
+
+  if (rules.has("retry-without-backoff-or-timeout") || rules.has("shared-state-without-lock-signal")) {
+    questions.push("Há expectativa de concorrência, carga, filas ou reprocessamento que exige teste de race/idempotência/backoff antes de aprovar?");
+  }
+
+  const catalogQuestions = domainQuestions(repo.config.domainCatalogs || [], domains, files);
+  return [...new Set([...questions, ...catalogQuestions, ...(repo.config.customQuestions || [])])];
+}
+
+function domainQuestions(catalogs, domains, files) {
+  const requested = new Set(catalogs.map((catalog) => String(catalog).toLowerCase()));
+  const text = files.join("\n");
+  if (/\b(cpf|cnpj|lgpd|privacy|consent|personalData|pii)\b/i.test(text)) requested.add("lgpd");
+  if (domains.has("financial")) requested.add("finance");
+  if (domains.has("health")) requested.add("health");
+  const questions = [];
+  if (requested.has("lgpd") || requested.has("privacy")) {
+    questions.push("LGPD/privacy: a mudança minimiza dados pessoais, preserva consentimento/base legal, redige logs e mantém retenção/anonimização compatíveis?");
+  }
+  if (requested.has("finance") || requested.has("financial")) {
+    questions.push("Financeiro: a mudança protege integridade de valores/transações, trilha de auditoria, idempotência e reconciliação contra duplicidade?");
+  }
+  if (requested.has("health")) {
+    questions.push("Saúde: a mudança limita exposição de dados clínicos, mantém consentimento/acesso mínimo e registra auditoria de acesso sensível?");
+  }
+  return questions;
 }
 
 function runtimeVerificationRequirementsForRepo(repo, findings, repositoryCount) {
@@ -1584,6 +1838,29 @@ function runtimeVerificationRequirementsForRepo(repo, findings, repositoryCount)
 
   if (rules.has("raw-sql-injection-risk") || rules.has("interpolated-raw-sql-risk")) {
     requirements.push("For raw SQL/security signals, prove parameter binding or allowlisted identifiers through the real query builder path; do not rely on string inspection alone.");
+  }
+
+  if ([
+    "weak-cryptographic-hash",
+    "insecure-crypto-algorithm-or-mode",
+    "password-hash-without-salt-or-kdf",
+    "cookie-missing-security-attributes",
+    "permissive-cors-policy",
+    "open-redirect-risk",
+    "ssrf-risk-unvalidated-url-fetch",
+    "file-upload-without-validation",
+    "webhook-without-signature-verification",
+    "auth-boundary-without-rate-limit-signal",
+  ].some((rule) => rules.has(rule))) {
+    requirements.push("For OWASP/security-boundary signals, add or run negative-path tests that prove unsafe external input is rejected and sensitive defaults are enforced through the real boundary.");
+  }
+
+  if (rules.has("retry-without-backoff-or-timeout")) {
+    requirements.push("For retry/backoff signals, prove bounded attempts, timeout, jitter/backoff behavior, or circuit-breaker handling with a focused failure-path test/probe.");
+  }
+
+  if (rules.has("shared-state-without-lock-signal")) {
+    requirements.push("For shared-state concurrency signals, run a deterministic parallel/race-oriented test or document why the touched state has a single-writer invariant.");
   }
 
   if (rules.has("no-test-file-changed")) {
@@ -1984,6 +2261,7 @@ for (const repo of repos) {
       medium: severities.medium || 0,
       low: severities.low || 0,
     },
+    domainSummary: summarizeDomains(findings),
     findings,
     userInputCheckpoints: questions,
     runtimeVerificationRequirements: runtimeRequirements,
@@ -1994,6 +2272,16 @@ for (const repo of repos) {
       tools: externalTools,
     },
   });
+}
+
+function summarizeDomains(findings) {
+  return findings.reduce((acc, finding) => {
+    const domain = finding.domain || "general";
+    acc[domain] = acc[domain] || { total: 0, high: 0, medium: 0, low: 0 };
+    acc[domain].total += 1;
+    acc[domain][finding.importance || finding.severity || "low"] = (acc[domain][finding.importance || finding.severity || "low"] || 0) + 1;
+    return acc;
+  }, {});
 }
 
 const globalSeverities = allFindings.reduce((acc, finding) => {
@@ -2076,6 +2364,10 @@ for (const repoPacket of packet.repositories) {
 
   console.log("### Deterministic Scan Findings");
   console.log(`Total: ${repoPacket.findingsSummary.total} (high: ${repoPacket.findingsSummary.high}, medium: ${repoPacket.findingsSummary.medium}, low: ${repoPacket.findingsSummary.low})`);
+  const domainEntries = Object.entries(repoPacket.domainSummary || {});
+  if (domainEntries.length > 0) {
+    console.log(`Domains: ${domainEntries.map(([domain, summary]) => `${domain}=${summary.total}`).join(", ")}`);
+  }
   if (repoPacket.findings.length === 0) {
     console.log("- no deterministic findings");
   } else {

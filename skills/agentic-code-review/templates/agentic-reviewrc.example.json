@@ -27,5 +27,15 @@
     "Esta mudanca afeta LGPD, privacidade, escopo de tenant ou dados sensiveis?",
     "Existe consumidor externo ou mobile que dependa deste contrato?"
   ],
+  "domainCatalogs": [
+    "lgpd",
+    "finance"
+  ],
+  "dastTargets": [
+    "https://staging.example.com"
+  ],
+  "performanceTargets": [
+    "https://staging.example.com/health"
+  ],
   "externalToolTimeoutMs": 60000
 }

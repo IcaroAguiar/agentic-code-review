@@ -100,6 +100,7 @@ Prioritize:
 - data consistency, race conditions, duplicate writes, idempotency, and transaction boundaries;
 - raw SQL, unsafe query APIs, interpolated SQL, and SQL injection risk;
 - unsafe HTML rendering, command execution with dynamic input, path traversal, sensitive-data logging, and other web/runtime security sinks;
+- OWASP-style boundary risks: weak crypto, insecure HTTP, permissive CORS, unsafe cookies, SSRF, open redirects, upload validation gaps, webhook signature gaps, and auth endpoints without rate-limit signals;
 - N+1 query patterns and per-item async calls that break at scale;
 - unbounded list/query access without an obvious limit, pagination, cursor, or batch boundary;
 - public/API response integrity: never expose raw domain, persistence, legacy, private, or internal state directly; public compatibility aliases must be sanitized subsets, while full contracts should live behind explicit public DTOs/resources;
@@ -124,6 +125,7 @@ It checks for signals, not final proof:
 - N+1 and per-item query patterns in common ORMs/query clients;
 - raw SQL and interpolated SQL injection risk;
 - unsafe HTML/XSS sinks, dynamic shell command execution, user-controlled filesystem paths, and sensitive-data logging;
+- weak cryptography, obsolete hash algorithms, missing password KDF/salt signals, insecure HTTP URLs, permissive CORS, cookies missing SameSite/Secure/HttpOnly, SSRF, open redirects, upload validation gaps, webhook endpoints without signature verification, auth boundaries without rate-limit signals, retries without backoff/timeout, and shared mutable state in async/concurrent contexts;
 - unbounded list/query access that lacks an obvious limit, pagination, cursor, or batch boundary;
 - public/API contract mappers that expose raw/internal/legacy/domain fields without a sanitizer, redaction, DTO/resource adapter, allowlist, or public type;
 - public response/resource/DTO types that reuse broad internal/domain/persistence types instead of sanitized public types;
@@ -169,15 +171,20 @@ Optional external toolbelt:
 - `lizard` for complexity;
 - `dependency-cruiser` or `madge` for JS/TS dependency cycles;
 - `osv-scanner` for dependency vulnerabilities when manifests/lockfiles change.
+- `grype` for container/filesystem dependency vulnerabilities;
+- `trufflehog` and `git-secrets` as additional secret scanners;
 - Python: `bandit` and `pip-audit`;
 - Go: `gosec` and `govulncheck`;
 - Ruby: `brakeman` and `bundler-audit`;
-- Docker/IaC: `trivy` and `checkov`.
+- Docker/IaC: `trivy`, `checkov`, and `regula`;
+- performance and DAST tools are opt-in only: `autocannon`, `wrk`, and OWASP `zap-baseline`, requiring `performanceTargets` or `dastTargets` in config and explicit `--external-tool`.
 
 These tools are additive evidence. Missing tools do not block by themselves; findings from installed tools must still be verified against the code. The collector may show `downloadable-disabled` when `npx` or `uvx` can fetch a tool, but it must not download or execute those fallbacks unless `--allow-tool-downloads` is passed intentionally. External tools are run one process at a time with a timeout and can be isolated with `--external-tool <name>` when a tool is slow, noisy, or network-dependent. Use `--external-tool-timeout-ms` to keep deep review deterministic on slow networks.
 
 Project config:
 - Use `.agentic-reviewrc.json` to disable noisy rules, override severity, tune thresholds, ignore generated paths, add business-specific questions, and set external tool timeouts.
+- Use `domainCatalogs` for built-in LGPD/privacy, finance, and health review questions.
+- Use `dastTargets` and `performanceTargets` only for explicit staging/load-test workflows; they are not run by default.
 - Prefer config tuning over weakening generic rules when one repository has special conventions.
 - Keep config small and explicit; do not use it to hide real risk.
 

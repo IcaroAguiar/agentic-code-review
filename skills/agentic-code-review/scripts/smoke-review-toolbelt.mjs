@@ -131,6 +131,64 @@ export function logToken(token: string) {
     },
   },
   {
+    name: "owasp-expanded-security",
+    files: {
+      ".agentic-reviewrc.json": `{
+  "domainCatalogs": ["lgpd", "finance"]
+}
+`,
+      "src/security.ts": `import crypto from "node:crypto";
+import { fetch } from "undici";
+
+export function weakHash(password: string) {
+  return crypto.createHash("md5").update(password).digest("hex");
+}
+
+export function cors(res: any) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.cookie("session", "abc");
+}
+
+export async function callback(req: any, res: any) {
+  await fetch(req.query.url);
+  res.redirect(req.query.returnTo);
+}
+
+export function upload(app: any) {
+  app.post("/upload", upload.single("file"), handler);
+}
+
+export function webhook(req: any) {
+  return stripeWebhookPayload(req.body);
+}
+
+export async function login(req: any) {
+  return authenticate(req.body.password);
+}
+
+export async function retryJob(client: any) {
+  for (let index = 0; index < 3; index += 1) {
+    await client.send();
+  }
+}
+`,
+    },
+    assert(output) {
+      expectIncludes(this.name, output, "weak-cryptographic-hash");
+      expectIncludes(this.name, output, "permissive-cors-policy");
+      expectIncludes(this.name, output, "cookie-missing-security-attributes");
+      expectIncludes(this.name, output, "ssrf-risk-unvalidated-url-fetch");
+      expectIncludes(this.name, output, "open-redirect-risk");
+      expectIncludes(this.name, output, "file-upload-without-validation");
+      expectIncludes(this.name, output, "webhook-without-signature-verification");
+      expectIncludes(this.name, output, "auth-boundary-without-rate-limit-signal");
+      expectIncludes(this.name, output, "retry-without-backoff-or-timeout");
+      expectIncludes(this.name, output, "LGPD/privacy");
+      expectIncludes(this.name, output, "Financeiro");
+      expectIncludes(this.name, output, "For OWASP/security-boundary signals");
+    },
+  },
+  {
     name: "artifact-checkpoint",
     files: {
       ".playwright-cli/session.json": `{"status":"local"}`,
@@ -598,6 +656,12 @@ expectIncludes("external-tool-selection", selectedToolOutput, "jscpd");
 expectNotIncludes("external-tool-selection", selectedToolOutput, "madge");
 console.log("PASS external-tool-selection");
 
+const selectedAdvancedToolOutput = collect(historicalRepo, ["--external-tool", "semgrep-autofix"]);
+expectIncludes("advanced-tool-selection", selectedAdvancedToolOutput, "Selected tools: semgrep-autofix");
+expectIncludes("advanced-tool-selection", selectedAdvancedToolOutput, "semgrep-autofix");
+expectNotIncludes("advanced-tool-selection", selectedAdvancedToolOutput, "autocannon");
+console.log("PASS advanced-tool-selection");
+
 const jsonOutput = collect(historicalRepo, ["--base", historicalBase, "--head", historicalHead, "--json"]);
 const jsonPacket = JSON.parse(jsonOutput);
 if (jsonPacket.status !== "ok" || jsonPacket.crossRepoSummary.findings < 1 || !Array.isArray(jsonPacket.repositories)) {
@@ -648,6 +712,9 @@ expectIncludes("reviewer-noisy-packet-triage", skillText, "otherwise keep them i
 expectIncludes("json-config-calibration", skillText, "--json");
 expectIncludes("json-config-calibration", skillText, ".agentic-reviewrc.json");
 expectIncludes("json-config-calibration", skillText, "agentic-code-review calibrate");
+expectIncludes("owasp-expanded-docs", skillText, "OWASP");
+expectIncludes("owasp-expanded-docs", skillText, "domainCatalogs");
+expectIncludes("owasp-expanded-docs", skillText, "zap-baseline");
 expectIncludes("browser-use-first-for-web-qa", skillText, "Web UI/browser changes, with the main agent using browser-use first");
 expectIncludes("authenticated-smoke-credentials", skillText, "do not accept \"login failed\" or \"stopped at login\" as sufficient evidence");
 expectIncludes("authenticated-smoke-credentials", skillText, "For `staging` or `prod`, it must not create credentials");
@@ -656,4 +723,4 @@ expectIncludes("authenticated-smoke-credentials", qaEvidenceText, "Credential cr
 expectNotIncludes("no-local-user-paths", skillText, "/Users/");
 console.log("PASS public-skill-contract");
 
-console.log(`PASS ${cases.length + 7}/${cases.length + 7} agentic-code-review smoke cases`);
+console.log(`PASS ${cases.length + 8}/${cases.length + 8} agentic-code-review smoke cases`);

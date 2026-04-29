@@ -130,6 +130,62 @@
       "fallbackInstall": "pipx install checkov",
       "collectorName": "checkov",
       "source": "https://github.com/bridgecrewio/checkov"
+    },
+    {
+      "name": "grype",
+      "recommendedVersion": "latest stable",
+      "purpose": "container and filesystem dependency vulnerability scanning",
+      "preferredInstall": "brew install grype",
+      "collectorName": "grype",
+      "source": "https://github.com/anchore/grype"
+    },
+    {
+      "name": "trufflehog",
+      "recommendedVersion": "latest stable",
+      "purpose": "secret scanning with verified credential detection",
+      "preferredInstall": "brew install trufflehog",
+      "collectorName": "trufflehog",
+      "source": "https://github.com/trufflesecurity/trufflehog"
+    },
+    {
+      "name": "git-secrets",
+      "recommendedVersion": "latest stable",
+      "purpose": "git secret pattern scanning",
+      "preferredInstall": "brew install git-secrets",
+      "collectorName": "git-secrets",
+      "source": "https://github.com/awslabs/git-secrets"
+    },
+    {
+      "name": "regula",
+      "recommendedVersion": "latest stable",
+      "purpose": "Infrastructure-as-code policy scanning",
+      "preferredInstall": "brew install regula",
+      "collectorName": "regula",
+      "source": "https://github.com/fugue/regula"
+    },
+    {
+      "name": "autocannon",
+      "recommendedVersion": "latest stable",
+      "purpose": "HTTP load smoke for configured performance targets",
+      "preferredInstall": "npm install -g autocannon",
+      "collectorName": "autocannon",
+      "source": "https://www.npmjs.com/package/autocannon"
+    },
+    {
+      "name": "wrk",
+      "recommendedVersion": "latest stable",
+      "purpose": "HTTP load smoke for configured performance targets",
+      "preferredInstall": "brew install wrk",
+      "collectorName": "wrk",
+      "source": "https://github.com/wg/wrk"
+    },
+    {
+      "name": "zap-baseline",
+      "recommendedVersion": "latest stable",
+      "purpose": "OWASP ZAP baseline DAST scan for configured staging targets",
+      "preferredInstall": "Install OWASP ZAP and expose zap-baseline.py",
+      "collectorName": "zap-baseline",
+      "source": "https://www.zaproxy.org/"
     }
   ]
 }

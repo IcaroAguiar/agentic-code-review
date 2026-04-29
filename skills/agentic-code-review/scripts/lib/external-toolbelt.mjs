@@ -42,6 +42,8 @@ function downloadableCandidate(tool, cwd) {
 
 export function externalToolbelt(repo, shouldRun, allowDownloads = false, selectedToolNames = [], timeoutMs = 60_000) {
   const selected = new Set(selectedToolNames);
+  const dastTarget = repo.config?.dastTargets?.[0] || "";
+  const performanceTarget = repo.config?.performanceTargets?.[0] || "";
   const rubyUserGemBins = (() => {
     const home = process.env.HOME || "";
     if (!home) return [];
@@ -100,6 +102,62 @@ export function externalToolbelt(repo, shouldRun, allowDownloads = false, select
         },
       ],
       installHint: "brew install semgrep or uv tool install semgrep",
+      runWhen: () => true,
+    },
+    {
+      name: "semgrep-autofix",
+      purpose: "Semgrep autofix suggestion mode for selected rules",
+      candidates: [
+        {
+          command: "pysemgrep",
+          args: ["scan", "--config", "p/default", "--autofix", "--dryrun", "--quiet", repo.root],
+          env: {
+            OCAML_EXTRA_CA_CERTS: "/opt/homebrew/etc/ca-certificates/cert.pem",
+            SEMGREP_ENABLE_VERSION_CHECK: "0",
+            SEMGREP_LOG_FILE: "/tmp/codex-semgrep-autofix.log",
+            SEMGREP_SEND_METRICS: "off",
+          },
+          downloads: false,
+        },
+        {
+          command: "semgrep",
+          args: ["scan", "--config", "p/default", "--autofix", "--dryrun", "--quiet", repo.root],
+          env: {
+            OCAML_EXTRA_CA_CERTS: "/opt/homebrew/etc/ca-certificates/cert.pem",
+            SEMGREP_ENABLE_VERSION_CHECK: "0",
+            SEMGREP_LOG_FILE: "/tmp/codex-semgrep-autofix.log",
+            SEMGREP_SEND_METRICS: "off",
+          },
+          downloads: false,
+        },
+      ],
+      installHint: "brew install semgrep or uv tool install semgrep",
+      runWhen: () => selected.has("semgrep-autofix"),
+    },
+    {
+      name: "trufflehog",
+      purpose: "secret scanning with verified credential detection",
+      candidates: [
+        {
+          command: "trufflehog",
+          args: ["filesystem", "--no-update", "--fail", repo.root],
+          downloads: false,
+        },
+      ],
+      installHint: "brew install trufflehog",
+      runWhen: () => true,
+    },
+    {
+      name: "git-secrets",
+      purpose: "git secret pattern scanning",
+      candidates: [
+        {
+          command: "git-secrets",
+          args: ["--scan", "-r", repo.root],
+          downloads: false,
+        },
+      ],
+      installHint: "brew install git-secrets",
       runWhen: () => true,
     },
     {
@@ -186,6 +244,23 @@ export function externalToolbelt(repo, shouldRun, allowDownloads = false, select
       ],
       installHint: "brew install osv-scanner",
       runWhen: () => repo.entries.some((entry) => /(^|\/)(package\.json|pnpm-lock\.yaml|package-lock\.json|yarn\.lock|go\.mod|go\.sum|Cargo\.toml|Cargo\.lock|pyproject\.toml|poetry\.lock|requirements.*\.txt|Gemfile\.lock|composer\.lock)$/.test(entry.path)),
+    },
+    {
+      name: "grype",
+      purpose: "container and filesystem dependency vulnerability scanning",
+      candidates: [
+        {
+          command: "grype",
+          args: [`dir:${repo.root}`, "--fail-on", "high"],
+          env: {
+            GRYPE_CHECK_FOR_APP_UPDATE: "false",
+            GRYPE_DB_CACHE_DIR: "/tmp/agentic-code-review-grype-db",
+          },
+          downloads: false,
+        },
+      ],
+      installHint: "brew install grype",
+      runWhen: () => repo.entries.some((entry) => /(^|\/)(Dockerfile|package\.json|pnpm-lock\.yaml|package-lock\.json|yarn\.lock|go\.mod|go\.sum|Cargo\.toml|Cargo\.lock|pyproject\.toml|poetry\.lock|requirements.*\.txt|Gemfile\.lock|composer\.lock)$/.test(entry.path)),
     },
     {
       name: "bandit",
@@ -329,6 +404,63 @@ export function externalToolbelt(repo, shouldRun, allowDownloads = false, select
       ],
       installHint: "uv tool install checkov or pipx install checkov",
       runWhen: () => repo.entries.some((entry) => /(^|\/)(Dockerfile|docker-compose\.ya?ml|compose\.ya?ml|Chart\.yaml|k8s|kubernetes|terraform|\.tf$)/i.test(entry.path)),
+    },
+    {
+      name: "regula",
+      purpose: "Infrastructure-as-code policy scanning",
+      candidates: [
+        {
+          command: "regula",
+          args: ["run", repo.root],
+          downloads: false,
+        },
+      ],
+      installHint: "brew install regula",
+      runWhen: () => repo.entries.some((entry) => /(^|\/)(terraform|\.tf$|k8s|kubernetes|cloudformation|template\.ya?ml$)/i.test(entry.path)),
+    },
+    {
+      name: "autocannon",
+      purpose: "HTTP load smoke for configured performance targets",
+      candidates: [
+        {
+          command: "autocannon",
+          args: ["-d", "10", "-c", "10", performanceTarget],
+          downloads: false,
+        },
+        {
+          command: "npx",
+          args: ["--yes", "autocannon", "-d", "10", "-c", "10", performanceTarget],
+          downloads: true,
+        },
+      ],
+      installHint: "npm install -g autocannon",
+      runWhen: () => selected.has("autocannon") && Boolean(performanceTarget),
+    },
+    {
+      name: "wrk",
+      purpose: "HTTP load smoke for configured performance targets",
+      candidates: [
+        {
+          command: "wrk",
+          args: ["-t2", "-c10", "-d10s", performanceTarget],
+          downloads: false,
+        },
+      ],
+      installHint: "brew install wrk",
+      runWhen: () => selected.has("wrk") && Boolean(performanceTarget),
+    },
+    {
+      name: "zap-baseline",
+      purpose: "OWASP ZAP baseline DAST scan for configured staging targets",
+      candidates: [
+        {
+          command: "zap-baseline.py",
+          args: ["-t", dastTarget, "-r", "/tmp/agentic-code-review-zap-report.html"],
+          downloads: false,
+        },
+      ],
+      installHint: "Install OWASP ZAP and expose zap-baseline.py",
+      runWhen: () => selected.has("zap-baseline") && Boolean(dastTarget),
     },
   ];
 
