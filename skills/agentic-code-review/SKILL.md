@@ -107,14 +107,15 @@ Prioritize:
 - OWASP-style boundary risks: weak crypto, insecure HTTP, permissive CORS, unsafe cookies, SSRF, open redirects, upload validation gaps, webhook signature gaps, and auth endpoints without rate-limit signals;
 - REST/API design risks: verb-oriented paths, mutating GET semantics, ambiguous mutation status codes, collection routes without pagination/filter/sort contracts, public APIs without a visible versioning strategy, and missing OpenAPI/consumer compatibility evidence;
 - GraphQL/gRPC/WebSocket risks: resolver N+1 and unbounded reads, mutations without boundary controls, subscriptions/realtime streams without scope/backpressure, production introspection, protobuf compatibility/versioning gaps, and realtime handlers without auth/validation/rate limits;
+- E2E and contract evidence risks: Cypress/Playwright/Istanbul critical-flow coverage below threshold, unreadable E2E reports, and failing OpenAPI/GraphQL/UI contract reports;
 - UI semantics/accessibility risks: missing landmarks, image alternatives, labels, keyboard semantics, and button/link distinction; rendered UI should be validated with browser-use plus axe, Testing Library role queries, jsx-a11y, or equivalent tooling when relevant;
-- advanced accessibility risks: positive tabindex, incorrect ARIA, hidden interactive content, missing focus-visible styling, missing skip links, contrast/focus regressions, and WCAG evidence gaps;
+- advanced accessibility/i18n risks: positive tabindex, incorrect ARIA, hidden interactive content, missing focus-visible styling, missing skip links, contrast/focus regressions, hardcoded UI strings outside message catalogs, plural/date/currency formatting gaps, and WCAG evidence gaps;
 - N+1 query patterns and per-item async calls that break at scale;
 - unbounded list/query access without an obvious limit, pagination, cursor, or batch boundary;
 - public/API response integrity: never expose raw domain, persistence, legacy, private, or internal state directly; public compatibility aliases must be sanitized subsets, while full contracts should live behind explicit public DTOs/resources;
 - weak boundary validation for public configuration, visual tokens, enums, modes, statuses, roles, provider names, URLs, radii, gradients, and other runtime-controlling strings;
 - error handling, swallowed exceptions, null fallbacks that mask UI error states, non-actionable messages, retries, timeouts, and rollback behavior;
-- observability and resilience: structured logs, correlation IDs, redaction, security/audit events, OpenTelemetry/metrics, external-call timeouts, retry/backoff, circuit breakers, and idempotent retry state;
+- observability and resilience: structured logs, request correlation IDs propagated through headers/context/logs, redaction, security/audit events, OpenTelemetry/metrics, external-call timeouts, retry/backoff, circuit breakers, and idempotent retry state;
 - architecture boundaries, call/dependency graph cycles, sensitive data crossing layers, responsibility size, hidden coupling, duplicated helper conventions, and circular dependencies;
 - async event/serverless behavior: idempotent consumers, deduplication, bounded retries, backoff, concurrency limits, timeout/memory limits, and safe reprocessing;
 - framework-aware boundary fit: NestJS controller/provider/DTO boundaries, Express/Next route conventions, Django/Flask/FastAPI auth dependencies, Spring/Rails controller/service boundaries, React/Vue/Svelte template semantics, Tailwind/BEM styling conventions, and separation between presentation, application/domain logic, and data/persistence;
@@ -144,8 +145,9 @@ It checks for signals, not final proof:
 - controller/resolver-to-contract coherence signals for OpenAPI/GraphQL SDL/protobuf compatibility, including missing contract docs, query complexity/depth limits, and breaking-change checks;
 - GraphQL, gRPC/protobuf, and WebSocket/realtime contract signals for auth, pagination/complexity, compatibility, schema evolution, scope, and backpressure;
 - UI semantic/a11y signals for landmarks, image alt text, input labels, keyboard-reachable controls, and correct action/navigation elements;
-- advanced a11y signals for ARIA misuse, focus-visible gaps, positive tabindex, and missing skip links;
-- observability/resilience signals for logs without correlation/redaction, security events without audit/metrics, external calls without timeout/retry/circuit breaker, and critical boundaries without instrumentation;
+- advanced a11y/i18n signals for ARIA misuse, focus-visible gaps, positive tabindex, missing skip links, low contrast, and hardcoded UI text outside i18n/message APIs;
+- observability/resilience signals for logs without correlation/redaction, missing correlation-id middleware/interceptors, security events without audit/metrics, external calls without timeout/retry/circuit breaker, and critical boundaries without instrumentation;
+- E2E and contract report signals for Cypress/Playwright/Istanbul critical-flow coverage and OpenAPI/GraphQL/UI contract failures;
 - event/serverless signals for consumers without idempotency/deduplication, workers without bounded retry/backoff/concurrency, and functions without timeout/memory/runtime limits;
 - repository graph signals for local dependency cycles, sensitive data flowing from boundary files into persistence layers, and route/resolver paths that import query-in-loop behavior;
 - documentation/coverage signals from available coverage reports, README, and CONTRIBUTING when API/runtime surfaces need documented endpoints, versioning, environment variables, examples, and review/test policy;
@@ -219,7 +221,10 @@ Project config:
 - Domain catalogs also include e-commerce, education, social media, and IoT. Use `customDomainQuestions` to add project-specific catalogs without changing the skill.
 - Use `dastTargets`, `performanceTargets`, and `a11yTargets` only for explicit staging/load-test/accessibility workflows; they are not run by default unless their named external tool is selected.
 - Use `graphqlBaseSchema`, `graphqlHeadSchema`, and `bundleStatsPath` only with explicit selected external tools such as `graphql-inspector` and `webpack-bundle-analyzer`.
+- Use `e2eCoverageReportPaths`, `contractTestReportPaths`, `criticalFlowKeywords`, `e2eCoverageMin`, and `contractPassRateMin` to read Cypress/Playwright/Istanbul and contract test artifacts.
 - Use `coverageLinesMin` to tune coverage-report checkpoints and `reviewFeedbackPath`/`--feedback-file` to feed reviewer calibration records.
+- Suggested patches are dry-run review aids. They may come from built-in heuristics or Semgrep rule-defined fixes, but the agent must verify imports, framework conventions, tests, and runtime behavior before applying any patch.
+- Use `templates/semgrep-autofix-rules.yml` as an example catalog for opt-in Semgrep autofix rules. Treat generated fixes as patch proposals for reviewer discussion, not as automatic remediation.
 - Prefer config tuning over weakening generic rules when one repository has special conventions.
 - Keep config small and explicit; do not use it to hide real risk.
 
@@ -239,7 +244,7 @@ After editing this skill or its scripts, run:
 node ~/.agents/skills/agentic-code-review/scripts/smoke-review-toolbelt.mjs
 ```
 
-The smoke creates temporary repositories and verifies core gates: SQL injection, N+1, unbounded list queries, REST/API design, NestJS framework boundaries, GraphQL/gRPC/WebSocket boundaries, events/serverless, observability/resilience, UI semantics/accessibility, advanced a11y, UI performance/bundle signals, call-graph/data-flow, architecture boundaries, docs/coverage, full-repo snapshot scans, local artifacts, control blocks not being treated as functions, production/test literal classification, mock-only tests, stale test mocks, narrating comments, happy-path-only tests, local literal paths, backend boundary integration/e2e coverage, and cross-repo contract checks.
+The smoke creates temporary repositories and verifies core gates: SQL injection, N+1, unbounded list queries, REST/API design, NestJS framework boundaries, GraphQL/gRPC/WebSocket boundaries, events/serverless, observability/resilience, correlation-id boundaries, circuit-breaker signals, UI semantics/accessibility, i18n extraction, low-contrast color pairs, advanced a11y, UI performance/bundle signals, call-graph/data-flow, architecture boundaries, E2E coverage reports, contract test reports, dry-run suggested patches, calibration feedback insights, docs/coverage, full-repo snapshot scans, local artifacts, control blocks not being treated as functions, production/test literal classification, mock-only tests, stale test mocks, narrating comments, happy-path-only tests, local literal paths, backend boundary integration/e2e coverage, and cross-repo contract checks.
 
 ## High-Testability Runtime Gate
 

@@ -50,6 +50,28 @@
       "type": "array",
       "items": { "type": "string" }
     },
+    "e2eCoverageReportPaths": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "contractTestReportPaths": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "criticalFlowKeywords": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "e2eCoverageMin": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "contractPassRateMin": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
     "graphqlBaseSchema": {
       "type": "string"
     },

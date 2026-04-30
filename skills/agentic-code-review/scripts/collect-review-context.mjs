@@ -136,6 +136,11 @@ const defaultConfig = {
   dastTargets: [],
   performanceTargets: [],
   a11yTargets: [],
+  e2eCoverageReportPaths: [],
+  contractTestReportPaths: [],
+  criticalFlowKeywords: ["auth", "login", "checkout", "cart", "payment", "tenant", "permission"],
+  e2eCoverageMin: undefined,
+  contractPassRateMin: undefined,
   externalToolTimeoutMs: undefined,
   coverageLinesMin: undefined,
   reviewFeedbackPath: "",
@@ -173,6 +178,9 @@ function mergeConfig(base, override) {
     dastTargets: [...(base.dastTargets || []), ...(override.dastTargets || [])],
     performanceTargets: [...(base.performanceTargets || []), ...(override.performanceTargets || [])],
     a11yTargets: [...(base.a11yTargets || []), ...(override.a11yTargets || [])],
+    e2eCoverageReportPaths: [...(base.e2eCoverageReportPaths || []), ...(override.e2eCoverageReportPaths || [])],
+    contractTestReportPaths: [...(base.contractTestReportPaths || []), ...(override.contractTestReportPaths || [])],
+    criticalFlowKeywords: override.criticalFlowKeywords || base.criticalFlowKeywords || [],
   };
 }
 
@@ -455,7 +463,7 @@ function isTest(file) {
 }
 
 function addFinding(findings, rule, severity, repo, file, line, text, suggestion) {
-  findings.push({
+  const finding = {
     rule,
     severity,
     repo,
@@ -465,7 +473,50 @@ function addFinding(findings, rule, severity, repo, file, line, text, suggestion
     suggestion,
     domain: classifyDomain(file, text),
     importance: classifyImportance(rule, severity, file, text),
-  });
+  };
+  const suggestedPatch = suggestedPatchForFinding(finding);
+  if (suggestedPatch) finding.suggestedPatch = suggestedPatch;
+  findings.push(finding);
+}
+
+function suggestedPatchForFinding(finding) {
+  if (finding.rule === "nestjs-nested-dto-without-type-transform") {
+    return {
+      mode: "dry-run",
+      confidence: "medium",
+      source: "agentic-code-review",
+      patch: `--- a/${finding.file}\n+++ b/${finding.file}\n@@\n-import { ValidateNested } from "class-validator";\n+import { ValidateNested } from "class-validator";\n+import { Type } from "class-transformer";\n@@\n   @ValidateNested()\n+  @Type(() => NestedDto)\n   field!: NestedDto;\n`,
+      notes: "Replace NestedDto/field with the concrete DTO and property. This is a safe suggestion only when the field type is a DTO class and ValidationPipe transform behavior is enabled or expected.",
+    };
+  }
+  if (finding.rule === "nestjs-mutating-route-without-auth-signal") {
+    return {
+      mode: "dry-run",
+      confidence: "low",
+      source: "agentic-code-review",
+      patch: `--- a/${finding.file}\n+++ b/${finding.file}\n@@\n+@UseGuards(AuthGuard)\n @Post(...)\n`,
+      notes: "Choose the project-specific guard or explicit public-route decorator. Do not apply blindly to intentionally public routes.",
+    };
+  }
+  if (finding.rule === "external-call-without-timeout-or-resilience") {
+    return {
+      mode: "dry-run",
+      confidence: "low",
+      source: "agentic-code-review",
+      patch: `--- a/${finding.file}\n+++ b/${finding.file}\n@@\n-  return await client.call(input);\n+  return await circuitBreaker.execute(() => client.call(input, { timeoutMs: DEFAULT_TIMEOUT_MS }));\n`,
+      notes: "Adapt to the local HTTP/client library. The reviewer must verify timeout, retry/backoff, breaker state, fallback, and idempotency semantics.",
+    };
+  }
+  if (finding.rule === "ui-hardcoded-text-without-i18n") {
+    return {
+      mode: "dry-run",
+      confidence: "medium",
+      source: "agentic-code-review",
+      patch: `--- a/${finding.file}\n+++ b/${finding.file}\n@@\n-  return <span>Texto visivel</span>;\n+  return <FormattedMessage id=\"screen.label\" defaultMessage=\"Texto visivel\" />;\n`,
+      notes: "Use the project's i18n library and message id conventions. Include plural/date/currency formatting when the string carries dynamic values.",
+    };
+  }
+  return null;
 }
 
 function classifyDomain(file, text = "") {
@@ -1414,6 +1465,12 @@ function scanUnboundedDataAccess(repo) {
 function scanObservabilityAndResilience(repo) {
   const findings = [];
   const serviceLikePath = /(^|\/)(services?|clients?|gateways?|adapters?|integrations?|jobs?|workers?|controllers?|routes?|handlers?|repositories?)\//i;
+  const allSourceText = existingFiles(repo.root, repo.entries)
+    .filter((value) => isCode(value) && !isTest(value))
+    .map((file) => readFile(repo.root, file))
+    .join("\n");
+  const hasCorrelationBoundary = /\b(x-correlation-id|correlationId|requestId|AsyncLocalStorage|cls-hooked|nestjs-cls|ContinuationLocalStorage|MDC|HandlerInterceptor|OncePerRequestFilter|TraceId|traceId)\b/i.test(allSourceText);
+  const hasOtelOrMetricsBoundary = /\b(OpenTelemetry|otel|trace|span|meter|metrics|prometheus|histogram|counter|duration|latency|MeterRegistry|ObservationRegistry)\b/i.test(allSourceText);
 
   for (const file of existingFiles(repo.root, repo.entries).filter((value) => isCode(value) && !isTest(value))) {
     if (changedLineCount(repo, file) === 0) continue;
@@ -1474,9 +1531,26 @@ function scanObservabilityAndResilience(repo) {
         );
       }
 
+      if (/\b(fetch|axios|request|http\.request|http\.get|grpc|GraphQLClient|new\s+[A-Z][A-Za-z0-9_]*(Client|Gateway|Sdk))\b/.test(window)
+        && serviceLikePath.test(file)
+        && !/\b(circuitBreaker|breaker|opossum|cockatiel|resilience4j|CircuitBreakerFactory|fallback|halfOpen|OPEN|HALF_OPEN|CLOSED)\b/i.test(window)
+        && !emitted.has("external-call-without-circuit-breaker")) {
+        emitted.add("external-call-without-circuit-breaker");
+        addFinding(
+          findings,
+          "external-call-without-circuit-breaker",
+          appType === "microservice" || appType === "public-api" ? "medium" : "low",
+          repo.name,
+          file,
+          line,
+          window,
+          "Critical external calls should have circuit-breaker or fallback policy when repeated failures can cascade. Verify CLOSED/OPEN/HALF_OPEN behavior, recovery timeout, and safe fallback where appropriate."
+        );
+      }
+
       if ((appType === "microservice" || appType === "public-api")
         && /\b(controllers?|handlers?|routes?|jobs?|workers?|consumer|message|request)\b/i.test(file + "\n" + window)
-        && !/\b(OpenTelemetry|otel|trace|span|meter|metrics|prometheus|histogram|counter|duration|latency)\b/i.test(text)
+        && !hasOtelOrMetricsBoundary
         && !emitted.has("critical-boundary-without-instrumentation-signal")) {
         emitted.add("critical-boundary-without-instrumentation-signal");
         addFinding(
@@ -1488,6 +1562,23 @@ function scanObservabilityAndResilience(repo) {
           line,
           "No OpenTelemetry/metrics signal detected in changed critical boundary.",
           "For public APIs and microservices, consider trace/span and metrics coverage for latency, error rate, and saturation on critical boundaries."
+        );
+      }
+
+      if ((appType === "microservice" || appType === "public-api" || /(^|\/)(controllers?|routes?|middleware|interceptors?|filters?|main)\//i.test(file))
+        && /\b(req|request|context|controller|handler|middleware|interceptor|route)\b/i.test(file + "\n" + window)
+        && !hasCorrelationBoundary
+        && !emitted.has("missing-correlation-id-boundary")) {
+        emitted.add("missing-correlation-id-boundary");
+        addFinding(
+          findings,
+          "missing-correlation-id-boundary",
+          "medium",
+          repo.name,
+          file,
+          line,
+          "No request correlation boundary detected across changed service/API files.",
+          "Add middleware/interceptor/filter support that creates or propagates x-correlation-id, stores it in AsyncLocalStorage/CLS/request context, and includes it in structured logs and outbound headers."
         );
       }
     });
@@ -2155,6 +2246,72 @@ function scanCoverageAndDocumentation(repo) {
     break;
   }
 
+  for (const reportPath of repo.config.e2eCoverageReportPaths || []) {
+    const fullPath = join(repo.root, reportPath);
+    if (!existsSync(fullPath)) continue;
+    try {
+      const report = JSON.parse(readFileSync(fullPath, "utf8"));
+      const pct = report.total?.lines?.pct ?? report.total?.statements?.pct ?? report.coverage?.lines ?? report.summary?.lines?.pct;
+      const min = Number(repo.config.e2eCoverageMin || repo.config.coverageLinesMin || 80);
+      const reportText = JSON.stringify(report).slice(0, 12000);
+      const criticalKeywords = repo.config.criticalFlowKeywords || [];
+      const criticalMentioned = criticalKeywords.filter((keyword) => new RegExp(`\\b${keyword}\\b`, "i").test(reportText));
+      if (typeof pct === "number" && pct < min && (criticalMentioned.length > 0 || apiChanged || args.fullRepository)) {
+        addFinding(
+          findings,
+          "e2e-critical-flow-coverage-below-threshold",
+          "medium",
+          repo.name,
+          reportPath,
+          "-",
+          `E2E/integration coverage ${pct}% below configured minimum ${min}%${criticalMentioned.length ? ` for critical flow terms: ${criticalMentioned.join(", ")}` : ""}.`,
+          "Use Cypress/Playwright coverage artifacts to prove critical user flows exercise the changed code. Add or adjust E2E/integration tests for auth, checkout/cart, tenant/permission, or project-specific critical flows."
+        );
+      }
+    } catch {
+      addFinding(
+        findings,
+        "e2e-coverage-report-unreadable",
+        "low",
+        repo.name,
+        reportPath,
+        "-",
+        "Configured E2E coverage report could not be parsed as JSON.",
+        "Regenerate the Cypress/Playwright/Istanbul coverage artifact or update e2eCoverageReportPaths."
+      );
+    }
+  }
+
+  for (const reportPath of repo.config.contractTestReportPaths || []) {
+    const fullPath = join(repo.root, reportPath);
+    if (!existsSync(fullPath)) continue;
+    const text = readFile(repo.root, reportPath) || readFileSync(fullPath, "utf8");
+    let failed = 0;
+    let total = 0;
+    try {
+      const report = JSON.parse(text);
+      failed = Number(report.stats?.failures ?? report.numFailedTests ?? report.failures ?? report.summary?.failed ?? 0);
+      total = Number(report.stats?.tests ?? report.numTotalTests ?? report.total ?? report.summary?.total ?? 0);
+    } catch {
+      failed = (text.match(/\b(failed|failure|error)\b/gi) || []).length;
+      total = (text.match(/\b(testcase|scenario|contract|assertion)\b/gi) || []).length;
+    }
+    const passRate = total > 0 ? ((total - failed) / total) * 100 : failed === 0 ? 100 : 0;
+    const min = Number(repo.config.contractPassRateMin || 100);
+    if (failed > 0 || passRate < min) {
+      addFinding(
+        findings,
+        "contract-test-report-failure-signal",
+        "medium",
+        repo.name,
+        reportPath,
+        "-",
+        `Contract report pass rate ${passRate.toFixed(1)}% with ${failed} failure signal(s).`,
+        "Resolve OpenAPI/GraphQL/UI contract report failures or document the compatibility decision before marking the API/UI contract ready."
+      );
+    }
+  }
+
   if ((apiChanged || manifestChanged || args.fullRepository) && readmePath) {
     const readme = readFile(repo.root, readmePath);
     const missing = [];
@@ -2334,6 +2491,95 @@ function scanAdvancedA11y(repo) {
         "Add a keyboard-visible skip link to let users bypass repeated navigation."
       );
     }
+  }
+
+  return findings;
+}
+
+function hexToRgb(hex) {
+  const normalized = String(hex || "").trim().replace(/^#/, "");
+  if (!/^[0-9a-f]{3}([0-9a-f]{3})?$/i.test(normalized)) return null;
+  const full = normalized.length === 3 ? normalized.split("").map((char) => char + char).join("") : normalized;
+  return {
+    r: Number.parseInt(full.slice(0, 2), 16),
+    g: Number.parseInt(full.slice(2, 4), 16),
+    b: Number.parseInt(full.slice(4, 6), 16),
+  };
+}
+
+function relativeLuminance({ r, g, b }) {
+  const convert = (value) => {
+    const channel = value / 255;
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * convert(r) + 0.7152 * convert(g) + 0.0722 * convert(b);
+}
+
+function contrastRatio(foreground, background) {
+  const fg = hexToRgb(foreground);
+  const bg = hexToRgb(background);
+  if (!fg || !bg) return null;
+  const lighter = Math.max(relativeLuminance(fg), relativeLuminance(bg));
+  const darker = Math.min(relativeLuminance(fg), relativeLuminance(bg));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function scanI18nAndAdvancedUi(repo) {
+  const findings = [];
+  const uiFilePattern = /\.(tsx|jsx|vue|svelte|astro|html)$/i;
+  const i18nFileSignal = existingFiles(repo.root, repo.entries).some((file) => /(^|\/)(locales?|i18n|translations?|messages?)\//i.test(file) || /\.(po|mo|xlf|xliff)$/i.test(file));
+  const i18nLibrarySignal = existingFiles(repo.root, repo.entries)
+    .filter((file) => /package\.json$/.test(file) || isCode(file))
+    .some((file) => /\b(react-intl|FormattedMessage|useIntl|intl\.formatMessage|next-intl|i18next|react-i18next|vue-i18n|svelte-i18n)\b/i.test(readFile(repo.root, file)));
+
+  for (const file of existingFiles(repo.root, repo.entries).filter((value) => uiFilePattern.test(value) && !isTest(value))) {
+    if (changedLineCount(repo, file) === 0) continue;
+    const text = readFile(repo.root, file);
+    const lines = text.split(/\r?\n/);
+    const emitted = new Set();
+
+    lines.forEach((lineText, index) => {
+      const line = index + 1;
+      const window = lines.slice(Math.max(0, index - 3), Math.min(lines.length, index + 6)).join("\n");
+      if (!windowTouchesChangedLine(repo, file, Math.max(1, line - 3), window.split(/\r?\n/).length)) return;
+
+      const visibleTextMatch = lineText.match(/>\s*([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9 ,.!?:;'"()/%-]{3,})\s*</)
+        || lineText.match(/\b(?:label|title|placeholder|aria-label|alt)=["']([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9 ,.!?:;'"()/%-]{3,})["']/);
+      if (visibleTextMatch
+        && !/\b(FormattedMessage|formatMessage|t\s*\(|i18n\.|intl\.|Trans\b|messageId|defaultMessage)\b/.test(window)
+        && !/^\s*(className|style|data-|id=)/.test(lineText)
+        && !emitted.has("ui-hardcoded-text-without-i18n")) {
+        emitted.add("ui-hardcoded-text-without-i18n");
+        addFinding(
+          findings,
+          "ui-hardcoded-text-without-i18n",
+          i18nFileSignal || i18nLibrarySignal ? "medium" : "low",
+          repo.name,
+          file,
+          line,
+          visibleTextMatch[1],
+          "User-visible UI strings should be extracted to the project i18n/message system, with plural/date/currency formatting handled by the i18n library when dynamic values are involved."
+        );
+      }
+
+      const colors = [...window.matchAll(/#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b/g)].map((match) => match[0]);
+      if (colors.length >= 2 && !emitted.has("possible-low-contrast-color-pair")) {
+        const ratio = contrastRatio(colors[0], colors[1]);
+        if (ratio !== null && ratio < 4.5) {
+          emitted.add("possible-low-contrast-color-pair");
+          addFinding(
+            findings,
+            "possible-low-contrast-color-pair",
+            "medium",
+            repo.name,
+            file,
+            line,
+            `${colors[0]} on ${colors[1]} contrast ratio ${ratio.toFixed(2)}:1`,
+            "WCAG normal text needs at least 4.5:1 contrast. Validate rendered contrast with axe/core browser evidence and adjust foreground/background tokens."
+          );
+        }
+      }
+    });
   }
 
   return findings;
@@ -2879,7 +3125,7 @@ function reviewQuestionsForRepo(repo, findings) {
     questions.push("A API não-REST alterada tem contrato/versionamento, limites de complexidade/paginação, auth/tenant scope, compatibilidade e teste de carga/realtime quando aplicável?");
   }
 
-  if (rules.has("external-call-without-timeout-or-resilience") || rules.has("critical-boundary-without-instrumentation-signal") || rules.has("unstructured-error-log-without-correlation") || rules.has("security-event-without-observability-signal")) {
+  if (rules.has("external-call-without-timeout-or-resilience") || rules.has("external-call-without-circuit-breaker") || rules.has("critical-boundary-without-instrumentation-signal") || rules.has("missing-correlation-id-boundary") || rules.has("unstructured-error-log-without-correlation") || rules.has("security-event-without-observability-signal")) {
     questions.push("O fluxo alterado precisa de observabilidade operacional nesta entrega: logs estruturados, correlation/trace IDs, métricas, auditoria ou circuit breaker?");
   }
 
@@ -2887,7 +3133,7 @@ function reviewQuestionsForRepo(repo, findings) {
     questions.push("A separação entre apresentação, aplicação/domínio e dados faz parte do escopo desta entrega, ou há uma restrição explícita para aceitar acoplamento temporário?");
   }
 
-  if (rules.has("coverage-report-below-threshold") || rules.has("coverage-report-unreadable") || rules.has("readme-missing-api-env-usage-signal") || rules.has("contributing-missing-review-test-policy")) {
+  if (rules.has("coverage-report-below-threshold") || rules.has("coverage-report-unreadable") || rules.has("e2e-critical-flow-coverage-below-threshold") || rules.has("e2e-coverage-report-unreadable") || rules.has("contract-test-report-failure-signal") || rules.has("readme-missing-api-env-usage-signal") || rules.has("contributing-missing-review-test-policy")) {
     questions.push("A documentação e cobertura disponíveis são critérios bloqueantes nesta entrega, ou devem gerar follow-up explícito com dono e escopo?");
   }
 
@@ -2897,6 +3143,10 @@ function reviewQuestionsForRepo(repo, findings) {
 
   if (rules.has("positive-tabindex-a11y-risk") || rules.has("redundant-or-conflicting-aria-role") || rules.has("aria-misuse-a11y-risk") || rules.has("focus-visible-style-missing") || rules.has("missing-skip-link-for-repeated-navigation")) {
     questions.push("A mudança de UI exige conformidade WCAG/foco/ARIA nesta PR, ou a revisão deve registrar ajustes de acessibilidade avançada como follow-up explícito?");
+  }
+
+  if (rules.has("ui-hardcoded-text-without-i18n") || rules.has("possible-low-contrast-color-pair")) {
+    questions.push("A mudança de UI precisa bloquear por i18n/WCAG nesta entrega, incluindo extração de strings, plural/data/moeda e contraste mínimo 4.5:1?");
   }
 
   if (rules.has("ui-network-on-input-without-debounce") || rules.has("ui-render-blocking-work-signal") || rules.has("heavy-dependency-without-bundle-budget")) {
@@ -3001,8 +3251,12 @@ function runtimeVerificationRequirementsForRepo(repo, findings, repositoryCount)
     requirements.push("For UI semantics/accessibility signals, validate the rendered component/page with browser-use plus a semantic/a11y check such as axe, eslint-plugin-jsx-a11y, Testing Library role queries, or equivalent framework-native assertions.");
   }
 
-  if (rules.has("positive-tabindex-a11y-risk") || rules.has("redundant-or-conflicting-aria-role") || rules.has("aria-misuse-a11y-risk") || rules.has("focus-visible-style-missing") || rules.has("missing-skip-link-for-repeated-navigation")) {
+  if (rules.has("positive-tabindex-a11y-risk") || rules.has("redundant-or-conflicting-aria-role") || rules.has("aria-misuse-a11y-risk") || rules.has("focus-visible-style-missing") || rules.has("missing-skip-link-for-repeated-navigation") || rules.has("possible-low-contrast-color-pair")) {
     requirements.push("For advanced accessibility signals, prove keyboard focus order, visible focus, skip-link behavior, ARIA role correctness, and WCAG contrast/focus checks through rendered UI tooling such as axe-core or equivalent.");
+  }
+
+  if (rules.has("ui-hardcoded-text-without-i18n")) {
+    requirements.push("For i18n signals, verify user-facing strings through the project message catalog or i18n runtime, including plural, date, currency, and lazy-loaded locale behavior when applicable.");
   }
 
   if (rules.has("ui-network-on-input-without-debounce") || rules.has("ui-render-blocking-work-signal") || rules.has("heavy-dependency-without-bundle-budget")) {
@@ -3052,12 +3306,16 @@ function runtimeVerificationRequirementsForRepo(repo, findings, repositoryCount)
     requirements.push("For retry/backoff signals, prove bounded attempts, timeout, jitter/backoff behavior, or circuit-breaker handling with a focused failure-path test/probe.");
   }
 
-  if (rules.has("external-call-without-timeout-or-resilience") || rules.has("critical-boundary-without-instrumentation-signal") || rules.has("unstructured-error-log-without-correlation") || rules.has("security-event-without-observability-signal")) {
+  if (rules.has("external-call-without-timeout-or-resilience") || rules.has("external-call-without-circuit-breaker") || rules.has("critical-boundary-without-instrumentation-signal") || rules.has("missing-correlation-id-boundary") || rules.has("unstructured-error-log-without-correlation") || rules.has("security-event-without-observability-signal")) {
     requirements.push("For observability/resilience signals, run failure-path or boundary tests/probes that prove timeout/circuit-breaker behavior and safe structured logs/metrics/traces/audit events on critical errors.");
   }
 
-  if (rules.has("coverage-report-below-threshold") || rules.has("coverage-report-unreadable")) {
+  if (rules.has("coverage-report-below-threshold") || rules.has("coverage-report-unreadable") || rules.has("e2e-critical-flow-coverage-below-threshold") || rules.has("e2e-coverage-report-unreadable")) {
     requirements.push("For coverage-report signals, identify the uncovered critical files/branches and run or add focused tests for the changed or historically risky behavior.");
+  }
+
+  if (rules.has("contract-test-report-failure-signal")) {
+    requirements.push("For contract report signals, resolve failing OpenAPI/GraphQL/UI contract checks or document the backward-compatibility decision and consumer impact.");
   }
 
   if (rules.has("shared-state-without-lock-signal")) {
@@ -3362,6 +3620,51 @@ function applyConfigToFindings(findings, config) {
     });
 }
 
+function readFeedbackItems(root, config) {
+  const path = config.reviewFeedbackPath ? join(root, config.reviewFeedbackPath) : "";
+  if (!path || !existsSync(path)) return [];
+  try {
+    const value = JSON.parse(readFileSync(path, "utf8"));
+    if (Array.isArray(value)) return value;
+    if (Array.isArray(value.feedback)) return value.feedback;
+  } catch {
+    return [];
+  }
+  return [];
+}
+
+function calibrationInsightsForRepo(repo, findings) {
+  const feedback = readFeedbackItems(repo.root, repo.config);
+  const byRule = {};
+  for (const item of feedback) {
+    const rule = item.rule || "unknown";
+    const outcome = String(item.outcome || item.type || "").toLowerCase();
+    byRule[rule] = byRule[rule] || { total: 0, falsePositive: 0, falseNegative: 0, severityMismatch: 0 };
+    byRule[rule].total += 1;
+    if (/false[-_ ]?positive|fp/.test(outcome)) byRule[rule].falsePositive += 1;
+    else if (/false[-_ ]?negative|fn/.test(outcome)) byRule[rule].falseNegative += 1;
+    else if (/severity|priority|classif/.test(outcome)) byRule[rule].severityMismatch += 1;
+  }
+  const activeRules = new Set(findings.map((finding) => finding.rule));
+  const suggestions = [];
+  for (const [rule, stats] of Object.entries(byRule)) {
+    if (stats.falsePositive >= 2 && activeRules.has(rule)) {
+      suggestions.push(`Rule ${rule} has ${stats.falsePositive} false-positive feedback item(s). Consider lowering severity, adding ignorePaths/context guards, or moving to review-signal in this repository.`);
+    }
+    if (stats.falseNegative >= 2) {
+      suggestions.push(`Rule ${rule} has ${stats.falseNegative} false-negative feedback item(s). Consider adding a deterministic fixture or project custom rule for the missed pattern.`);
+    }
+    if (stats.severityMismatch >= 2) {
+      suggestions.push(`Rule ${rule} has repeated severity mismatch feedback. Consider a .agentic-reviewrc severities override or generic severity adjustment after calibration.`);
+    }
+  }
+  return {
+    feedbackItems: feedback.length,
+    rules: byRule,
+    suggestions,
+  };
+}
+
 function buildRepos() {
   const roots = args.roots.length > 0 ? args.roots.flatMap((root) => discoverGitRoots(root, args.discoverDepth)) : discoverGitRoots(startCwd, args.discoverDepth);
   const uniqueRoots = [...new Set(roots)].sort();
@@ -3426,6 +3729,7 @@ for (const repo of repos) {
     ...scanApiContractCoherence(repo),
     ...scanUiSemanticsAndA11y(repo),
     ...scanAdvancedA11y(repo),
+    ...scanI18nAndAdvancedUi(repo),
     ...scanPublicContractIntegrity(repo),
     ...scanConfigValidationIntegrity(repo),
     ...scanBundleSplitRisks(repo),
@@ -3452,6 +3756,7 @@ for (const repo of repos) {
   const runtimeRequirements = runtimeVerificationRequirementsForRepo(repo, findings, repos.length);
   const normalized = normalizedGateSummary(findings, runtimeRequirements, questions, isTest);
   const externalTools = externalToolbelt(repo, args.runExternalTools, args.allowToolDownloads, args.externalTools, repo.config.externalToolTimeoutMs || args.externalToolTimeoutMs);
+  const calibrationInsights = calibrationInsightsForRepo(repo, findings);
 
   repositoryPackets.push({
     name: repo.name,
@@ -3475,6 +3780,7 @@ for (const repo of repos) {
     },
     domainSummary: summarizeDomains(findings),
     findings,
+    calibrationInsights,
     userInputCheckpoints: questions,
     runtimeVerificationRequirements: runtimeRequirements,
     externalToolbelt: {
@@ -3589,8 +3895,26 @@ for (const repoPacket of packet.repositories) {
       console.log(`- [${finding.severity}] ${finding.rule} at ${finding.file}:${finding.line}`);
       console.log(`  Evidence: ${finding.text.replace(/\s+/g, " ")}`);
       console.log(`  Suggestion: ${finding.suggestion}`);
+      if (finding.suggestedPatch) {
+        console.log(`  Suggested patch (${finding.suggestedPatch.mode}, ${finding.suggestedPatch.confidence} confidence):`);
+        console.log(finding.suggestedPatch.patch.split(/\r?\n/).map((line) => `    ${line}`).join("\n"));
+        if (finding.suggestedPatch.notes) console.log(`  Patch notes: ${finding.suggestedPatch.notes}`);
+      }
     });
     if (repoPacket.findings.length > 80) console.log(`- truncated ${repoPacket.findings.length - 80} additional findings`);
+  }
+  console.log("");
+
+  console.log("### Calibration Insights");
+  if (!repoPacket.calibrationInsights?.feedbackItems) {
+    console.log("- no reviewer feedback file loaded");
+  } else {
+    console.log(`- feedback items: ${repoPacket.calibrationInsights.feedbackItems}`);
+    if (repoPacket.calibrationInsights.suggestions.length === 0) {
+      console.log("- no repeated calibration action suggested");
+    } else {
+      repoPacket.calibrationInsights.suggestions.forEach((suggestion) => console.log(`- ${suggestion}`));
+    }
   }
   console.log("");
 

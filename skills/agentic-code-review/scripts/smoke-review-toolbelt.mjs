@@ -861,6 +861,64 @@ message ListResponse { string id = 1; }
     },
   },
   {
+    name: "e2e-autofix-observability-i18n",
+    files: {
+      ".agentic-reviewrc.json": `{
+  "appType": "public-api",
+  "e2eCoverageReportPaths": ["coverage/e2e/coverage-summary.json"],
+  "contractTestReportPaths": ["reports/contracts/openapi-results.json"],
+  "criticalFlowKeywords": ["auth", "checkout"],
+  "e2eCoverageMin": 85,
+  "contractPassRateMin": 100,
+  "reviewFeedbackPath": "docs/ai/agentic-code-review-feedback.json"
+}
+`,
+      "docs/ai/agentic-code-review-feedback.json": `{"feedback":[
+  {"rule":"ui-hardcoded-text-without-i18n","outcome":"false-positive"},
+  {"rule":"ui-hardcoded-text-without-i18n","outcome":"false-positive"},
+  {"rule":"external-call-without-circuit-breaker","outcome":"false-negative"},
+  {"rule":"external-call-without-circuit-breaker","outcome":"false-negative"}
+]}`,
+      "coverage/e2e/coverage-summary.json": `{"total":{"lines":{"pct":62},"statements":{"pct":62}},"auth":{"lines":{"pct":55}}}`,
+      "reports/contracts/openapi-results.json": `{"stats":{"tests":4,"failures":1}}`,
+      "src/users.dto.ts": `function ValidateNested() { return function noop() {}; }
+export class CreateUserDto {
+  @ValidateNested()
+  profile!: ProfileDto;
+}
+`,
+      "src/services/payment-client.ts": `export async function charge(input) {
+  return await fetch(input.url);
+}
+`,
+      "src/controllers/app.controller.ts": `export class AppController {
+  getProfile(req) {
+    logger.error("request failed");
+    return req.user;
+  }
+}
+`,
+      "src/components/Checkout.tsx": `export function Checkout() {
+  return <button style={{ color: "#777777", backgroundColor: "#888888" }}>Comprar agora</button>;
+}
+`,
+      "package.json": `{"dependencies":{"react-intl":"latest"}}`,
+    },
+    assert(output) {
+      expectIncludes(this.name, output, "e2e-critical-flow-coverage-below-threshold");
+      expectIncludes(this.name, output, "contract-test-report-failure-signal");
+      expectIncludes(this.name, output, "nestjs-nested-dto-without-type-transform");
+      expectIncludes(this.name, output, "Suggested patch (dry-run");
+      expectIncludes(this.name, output, "external-call-without-circuit-breaker");
+      expectIncludes(this.name, output, "missing-correlation-id-boundary");
+      expectIncludes(this.name, output, "ui-hardcoded-text-without-i18n");
+      expectIncludes(this.name, output, "possible-low-contrast-color-pair");
+      expectIncludes(this.name, output, "feedback items: 4");
+      expectIncludes(this.name, output, "false-positive feedback");
+      expectIncludes(this.name, output, "false-negative feedback");
+    },
+  },
+  {
     name: "advanced-a11y-and-ui-performance",
     files: {
       "src/layout/AppShell.tsx": `export function AppShell() {
@@ -1144,7 +1202,7 @@ expectIncludes("web-api-architecture-docs", skillText, "async event/serverless b
 expectIncludes("web-api-architecture-docs", skillText, "repository graph signals");
 expectIncludes("web-api-architecture-docs", skillText, "--feedback-file");
 expectIncludes("web-api-architecture-docs", skillText, "observability and resilience");
-expectIncludes("web-api-architecture-docs", skillText, "advanced accessibility risks");
+expectIncludes("web-api-architecture-docs", skillText, "advanced accessibility/i18n risks");
 expectIncludes("web-api-architecture-docs", skillText, "UI performance risks");
 expectIncludes("web-api-architecture-docs", skillText, "UI semantics/accessibility risks");
 expectIncludes("web-api-architecture-docs", skillText, "architecture/layering signals");
@@ -1152,6 +1210,15 @@ expectIncludes("web-api-architecture-docs", skillText, "spotbugs");
 expectIncludes("web-api-architecture-docs", skillText, "graphql-inspector");
 expectIncludes("web-api-architecture-docs", skillText, "customDomainQuestions");
 expectIncludes("web-api-architecture-docs", skillText, "appType");
+expectIncludes("final-phase-docs", skillText, "e2eCoverageReportPaths");
+expectIncludes("final-phase-docs", skillText, "contractTestReportPaths");
+expectIncludes("final-phase-docs", skillText, "Suggested patches are dry-run review aids.");
+expectIncludes("final-phase-docs", skillText, "Semgrep rule-defined fixes");
+expectIncludes("final-phase-docs", skillText, "correlation-id boundaries");
+expectIncludes("final-phase-docs", skillText, "circuit-breaker signals");
+expectIncludes("final-phase-docs", skillText, "i18n extraction");
+expectIncludes("final-phase-docs", skillText, "low-contrast color pairs");
+expectIncludes("final-phase-docs", skillText, "calibration feedback insights");
 expectIncludes("browser-use-first-for-web-qa", skillText, "Web UI/browser changes, with the main agent using browser-use first");
 expectIncludes("authenticated-smoke-credentials", skillText, "do not accept \"login failed\" or \"stopped at login\" as sufficient evidence");
 expectIncludes("authenticated-smoke-credentials", skillText, "For `staging` or `prod`, it must not create credentials");

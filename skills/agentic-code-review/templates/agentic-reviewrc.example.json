@@ -47,6 +47,22 @@
   "a11yTargets": [
     "https://staging.example.com/dashboard"
   ],
+  "e2eCoverageReportPaths": [
+    "coverage/e2e/coverage-summary.json"
+  ],
+  "contractTestReportPaths": [
+    "reports/contracts/openapi-results.json",
+    "reports/contracts/graphql-results.json"
+  ],
+  "criticalFlowKeywords": [
+    "auth",
+    "checkout",
+    "cart",
+    "tenant",
+    "permission"
+  ],
+  "e2eCoverageMin": 80,
+  "contractPassRateMin": 100,
   "graphqlBaseSchema": "schema.graphql",
   "graphqlHeadSchema": "schema.graphql",
   "bundleStatsPath": "dist/stats.json",

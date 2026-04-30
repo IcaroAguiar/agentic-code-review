@@ -26,6 +26,7 @@ agentic-code-review/
         agentic-reviewrc.schema.json
         github-action-agentic-code-review.yml
         deep-review-toolbelt-2026.json
+        semgrep-autofix-rules.yml
         reviewer-feedback.example.json
         calibration-2026-04-28.md
         contract-compatibility-test.vitest.ts
@@ -172,6 +173,8 @@ This command prints a review packet with:
 
 The collector intentionally reports signals, not proof. A finding should be verified against the actual code before becoming a final review comment.
 
+When a rule can suggest a mechanical fix, the packet may include a `suggestedPatch` block. These patches are always dry-run proposals. They are meant to help the reviewer and implementer see the likely correction, not to mutate the repository automatically. Apply them only after checking imports, framework conventions, behavior tests, and project style.
+
 Important options:
 
 - `--json`: emits a structured packet for CI, dashboards, or calibration.
@@ -199,11 +202,32 @@ Supported fields:
 - `dastTargets`: staging URLs for explicit OWASP ZAP baseline scans.
 - `performanceTargets`: URLs for explicit `autocannon`/`wrk` load smoke runs.
 - `a11yTargets`: rendered UI URLs for explicit axe accessibility scans.
+- `e2eCoverageReportPaths`: Cypress/Playwright/Istanbul coverage JSON files for critical user-flow coverage.
+- `contractTestReportPaths`: OpenAPI, GraphQL, or UI contract test result JSON/text files.
+- `criticalFlowKeywords`: domain terms such as `auth`, `checkout`, `cart`, `tenant`, or project-specific flows used when interpreting E2E reports.
+- `e2eCoverageMin` and `contractPassRateMin`: thresholds for configured E2E coverage and contract reports.
 - `graphqlBaseSchema` / `graphqlHeadSchema`: schema paths for explicit GraphQL Inspector compatibility checks.
 - `bundleStatsPath`: stats file path for explicit bundle analysis.
 - `coverageLinesMin`: minimum coverage percentage used when a coverage summary exists.
 - `reviewFeedbackPath`: conventional path for reviewer feedback records used during calibration.
 - `externalToolTimeoutMs`: set the default optional tool timeout for that repository.
+
+### Suggested patches and Semgrep autofix
+
+The built-in collector can attach dry-run patch proposals to selected high-signal findings, for example:
+
+- adding a `class-transformer` `@Type(() => NestedDto)` hint when a NestJS DTO uses `@ValidateNested()` without a visible type transformer;
+- adding a visible guard/public-route decision around mutating NestJS routes;
+- wrapping critical external service calls with timeout and circuit-breaker policy;
+- extracting hardcoded UI text to a project i18n/message API.
+
+The template below shows how teams can also maintain Semgrep rule-defined fixes as opt-in proposals:
+
+```text
+skills/agentic-code-review/templates/semgrep-autofix-rules.yml
+```
+
+Run Semgrep autofix rules only in an explicit dry-run workflow, then paste or attach the diff as reviewer evidence. Do not let the skill apply generated patches automatically.
 
 ### `agentic-code-review calibrate`
 
@@ -225,7 +249,7 @@ Runs the fixture smoke suite for the skill and scripts:
 npx agentic-code-review smoke
 ```
 
-The smoke suite creates temporary Git repositories under `/private/tmp/agentic-code-review-smoke` and verifies scanner behavior for core cases such as SQL injection, N+1, unbounded list queries, REST/API design, NestJS framework boundaries, GraphQL/gRPC/WebSocket boundaries, events/serverless, observability/resilience, UI semantics/accessibility, UI performance, call-graph/data-flow, architecture boundaries, docs/coverage, patch semantics, public contract leaks, UI token validation, full-repo snapshot scans, large-file signals, cross-repo contracts, historical `--base/--head` ranges, calibration feedback, and optional tool selection.
+The smoke suite creates temporary Git repositories under `/private/tmp/agentic-code-review-smoke` and verifies scanner behavior for core cases such as SQL injection, N+1, unbounded list queries, REST/API design, NestJS framework boundaries, GraphQL/gRPC/WebSocket boundaries, events/serverless, observability/resilience, correlation-id boundaries, circuit-breaker signals, UI semantics/accessibility, i18n extraction, low-contrast color pairs, UI performance, E2E coverage reports, contract test reports, dry-run suggested patches, call-graph/data-flow, architecture boundaries, docs/coverage, patch semantics, public contract leaks, UI token validation, full-repo snapshot scans, large-file signals, cross-repo contracts, historical `--base/--head` ranges, calibration feedback, and optional tool selection.
 
 It also validates JSON output, project config behavior, domain catalogs, and generic web/runtime/OWASP security signals such as unsafe HTML sinks, command injection, path traversal, weak crypto, permissive CORS, unsafe cookies, SSRF, open redirects, uploads, webhook signatures, retry/backoff gaps, and sensitive-data logging.
 
@@ -313,10 +337,11 @@ The collector currently checks for:
 - REST/API route design signals: verb-oriented paths, unsafe GET mutation signals, mutation status-code ambiguity, collection routes without pagination/filter contracts, and public routes without visible versioning strategy;
 - controller/resolver-to-contract coherence signals for OpenAPI/GraphQL SDL/protobuf, query complexity/depth limits, and gRPC breaking-change checks;
 - GraphQL/gRPC/WebSocket signals: resolver N+1 or unbounded reads, mutations without boundary controls, subscriptions without scope/backpressure, production introspection signals, protobuf compatibility/versioning gaps, and realtime handlers without auth/backpressure;
+- Cypress/Playwright/E2E coverage and contract-report signals for critical flows and OpenAPI/GraphQL/UI contract failures;
 - event/serverless signals: consumers without idempotency/deduplication, workers without bounded retry/backoff/concurrency, and functions without explicit timeout/memory/runtime limits;
 - UI semantic and accessibility signals: missing image alternatives, unlabeled inputs, clickable divs without keyboard semantics, link/button semantic drift, and page/layout files with many divs but no landmarks;
-- advanced accessibility signals: positive tabindex, ARIA misuse, missing focus-visible replacement, and missing skip links for repeated navigation;
-- observability/resilience signals: unstructured error logs without correlation IDs, security events without audit/metrics, external calls without timeout/retry/circuit-breaker policy, and critical boundaries without instrumentation signals;
+- advanced accessibility/i18n signals: positive tabindex, ARIA misuse, missing focus-visible replacement, missing skip links, low contrast color pairs, and hardcoded UI text outside i18n/message catalogs;
+- observability/resilience signals: unstructured error logs without correlation IDs, missing correlation-id boundaries, security events without audit/metrics, external calls without timeout/retry/circuit-breaker policy, and critical boundaries without instrumentation signals;
 - UI performance signals: network-on-input without debounce/cancellation, blocking render work, and heavy dependencies without bundle-budget evidence;
 - architecture boundary and graph signals: domain imports from outer/framework layers, presentation importing data/persistence directly, missing port/interface boundaries, local dependency cycles, sensitive data crossing layers, route call paths that import query loops, and UI mixing rendering with direct data access;
 - framework-specific signals: NestJS controllers that access persistence directly, mutating Nest routes without visible guard/public intent, nested DTO validation without class-transformer `@Type`, Nest providers that bypass DI, Django/Flask/FastAPI route auth gaps, Spring controllers that access repositories directly, and Rails broad rescues without observability;
@@ -523,6 +548,8 @@ Example test shape for proving application/domain boundaries through ports or fa
 Template for recording scanner calibration against real historical PRs or merge windows.
 
 Use it when tuning rules to reduce false positives or catch false negatives.
+
+Calibration now also accepts feedback about E2E coverage, contract reports, i18n, accessibility, observability, resilience, and suggested patches. Repeated false positives should become config tuning or narrower heuristics; repeated false negatives should become new fixtures or deterministic rules.
 
 ## Development
 

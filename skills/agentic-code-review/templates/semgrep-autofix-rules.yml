@@ -1,0 +1,25 @@
+rules:
+  - id: agentic-python-use-sys-exit-example
+    languages:
+      - python
+    message: Use sys.exit instead of shell helper exit.
+    severity: INFO
+    pattern: exit($X)
+    fix: sys.exit($X)
+    metadata:
+      agentic-code-review: true
+      fix-mode: dry-run
+      review-note: Example Semgrep rule-defined fix pattern; import sys if needed before applying.
+
+  - id: agentic-typescript-hardcoded-error-message-example
+    languages:
+      - typescript
+      - javascript
+    message: Consider centralizing repeated user-visible error messages behind a message catalog or constant.
+    severity: INFO
+    pattern: throw new Error("Something went wrong")
+    fix: throw new Error(ERROR_MESSAGES.genericFailure)
+    metadata:
+      agentic-code-review: true
+      fix-mode: dry-run
+      review-note: Example only. Verify the project has an ERROR_MESSAGES catalog or adapt to its i18n/error model.

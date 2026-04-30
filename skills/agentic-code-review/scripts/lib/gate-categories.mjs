@@ -36,6 +36,8 @@ export function findingCategory(finding, isTestFile) {
     "contributing-missing-review-test-policy",
     "coverage-report-below-threshold",
     "coverage-report-unreadable",
+    "e2e-coverage-report-unreadable",
+    "ui-hardcoded-text-without-i18n",
     "graphql-introspection-enabled-without-prod-guard",
     "grpc-proto-without-compatibility-signal",
     "critical-boundary-without-instrumentation-signal",
