@@ -176,10 +176,132 @@ function summarizePacket(packet) {
   };
 }
 
+function topRulesForPacket(packet, limit = 8) {
+  const counts = {};
+  for (const repo of packet.repositories || []) {
+    for (const finding of repo.findings || []) {
+      counts[finding.rule] = (counts[finding.rule] || 0) + 1;
+    }
+  }
+  return Object.entries(counts)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, limit)
+    .map(([rule, count]) => ({ rule, count }));
+}
+
+function topDomainsForPacket(packet, limit = 6) {
+  const counts = {};
+  for (const repo of packet.repositories || []) {
+    for (const [domain, summary] of Object.entries(repo.domainSummary || {})) {
+      counts[domain] = (counts[domain] || 0) + (summary.total || 0);
+    }
+  }
+  return Object.entries(counts)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, limit)
+    .map(([domain, count]) => ({ domain, count }));
+}
+
+function gateSummaryForPacket(packet) {
+  return (packet.repositories || []).reduce((acc, repo) => {
+    for (const [key, value] of Object.entries(repo.normalizedGateSummary || {})) {
+      acc[key] = (acc[key] || 0) + value;
+    }
+    return acc;
+  }, {});
+}
+
+function runtimeRequirementCount(packet) {
+  return (packet.repositories || []).reduce((acc, repo) => acc + (repo.runtimeVerificationRequirements || []).length, 0);
+}
+
+function checkpointCount(packet) {
+  return (packet.repositories || []).reduce((acc, repo) => acc + (repo.userInputCheckpoints || []).length, 0);
+}
+
+function suggestedPatchCount(packet) {
+  return (packet.repositories || []).reduce((acc, repo) => acc + (repo.findings || []).filter((finding) => finding.suggestedPatch).length, 0);
+}
+
+function casePresentation(entry) {
+  if (!entry.packet) return null;
+  return {
+    gate: gateSummaryForPacket(entry.packet),
+    topRules: topRulesForPacket(entry.packet),
+    topDomains: topDomainsForPacket(entry.packet),
+    runtimeRequirements: runtimeRequirementCount(entry.packet),
+    checkpoints: checkpointCount(entry.packet),
+    suggestedPatches: suggestedPatchCount(entry.packet),
+  };
+}
+
+function aggregateCases(cases) {
+  const aggregate = {
+    ok: 0,
+    failed: 0,
+    findings: 0,
+    high: 0,
+    medium: 0,
+    low: 0,
+    gates: {},
+    rules: {},
+    domains: {},
+    runtimeRequirements: 0,
+    checkpoints: 0,
+    suggestedPatches: 0,
+  };
+  for (const entry of cases) {
+    if (entry.status === "ok") aggregate.ok += 1;
+    else aggregate.failed += 1;
+    if (entry.summary) {
+      aggregate.findings += entry.summary.findings || 0;
+      aggregate.high += entry.summary.high || 0;
+      aggregate.medium += entry.summary.medium || 0;
+      aggregate.low += entry.summary.low || 0;
+    }
+    const presentation = entry.presentation || casePresentation(entry);
+    if (!presentation) continue;
+    for (const [key, value] of Object.entries(presentation.gate || {})) {
+      aggregate.gates[key] = (aggregate.gates[key] || 0) + value;
+    }
+    for (const item of presentation.topRules || []) {
+      aggregate.rules[item.rule] = (aggregate.rules[item.rule] || 0) + item.count;
+    }
+    for (const item of presentation.topDomains || []) {
+      aggregate.domains[item.domain] = (aggregate.domains[item.domain] || 0) + item.count;
+    }
+    aggregate.runtimeRequirements += presentation.runtimeRequirements || 0;
+    aggregate.checkpoints += presentation.checkpoints || 0;
+    aggregate.suggestedPatches += presentation.suggestedPatches || 0;
+  }
+  return aggregate;
+}
+
+function topEntries(map, limit = 10) {
+  return Object.entries(map || {})
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, limit)
+    .map(([key, value]) => `${key} (${value})`);
+}
+
 function renderMarkdown(report) {
   const lines = ["# Agentic Code Review Calibration", ""];
+  const aggregate = aggregateCases(report.cases);
   lines.push(`Repository: ${report.repository}`);
   lines.push(`Cases: ${report.cases.length}`);
+  lines.push(`OK cases: ${aggregate.ok}`);
+  lines.push(`Failed cases: ${aggregate.failed}`);
+  lines.push(`Findings: ${aggregate.findings} (high: ${aggregate.high}, medium: ${aggregate.medium}, low: ${aggregate.low})`);
+  lines.push(`Gate totals: blocking=${aggregate.gates.blocking || 0}, review-signal=${aggregate.gates["review-signal"] || 0}, runtime-required=${aggregate.gates["runtime-required"] || 0}, user-input-checkpoint=${aggregate.gates["user-input-checkpoint"] || 0}, informational=${aggregate.gates.informational || 0}`);
+  lines.push(`Runtime requirements: ${aggregate.runtimeRequirements}`);
+  lines.push(`User input checkpoints: ${aggregate.checkpoints}`);
+  lines.push(`Suggested patches: ${aggregate.suggestedPatches}`);
+  lines.push("");
+  lines.push("## PR-Ready Summary");
+  lines.push(`Top recurring rules: ${topEntries(aggregate.rules).join(", ") || "none"}`);
+  lines.push(`Top domains: ${topEntries(aggregate.domains, 8).join(", ") || "none"}`);
+  lines.push("");
+  lines.push("Use this section in PRs as calibration evidence. It is intentionally concise: link or attach the JSON packet only when a reviewer needs the raw details.");
   lines.push("");
   for (const entry of report.cases) {
     lines.push(`## ${entry.name}`);
@@ -188,11 +310,26 @@ function renderMarkdown(report) {
     if (entry.error) lines.push(`Error: ${entry.error.replace(/\s+/g, " ").slice(0, 500)}`);
     if (entry.summary) {
       lines.push(`Findings: ${entry.summary.findings} (high: ${entry.summary.high}, medium: ${entry.summary.medium}, low: ${entry.summary.low})`);
-      lines.push(`Rules: ${entry.summary.rules.length ? entry.summary.rules.join(", ") : "none"}`);
+      const presentation = entry.presentation || casePresentation(entry);
+      if (presentation) {
+        const gate = presentation.gate || {};
+        lines.push(`Gate: blocking=${gate.blocking || 0}, review-signal=${gate["review-signal"] || 0}, runtime-required=${gate["runtime-required"] || 0}, checkpoints=${gate["user-input-checkpoint"] || 0}, informational=${gate.informational || 0}`);
+        lines.push(`Top rules: ${presentation.topRules.map((item) => `${item.rule} (${item.count})`).join(", ") || "none"}`);
+        lines.push(`Top domains: ${presentation.topDomains.map((item) => `${item.domain} (${item.count})`).join(", ") || "none"}`);
+        lines.push(`Runtime requirements: ${presentation.runtimeRequirements}; user checkpoints: ${presentation.checkpoints}; suggested patches: ${presentation.suggestedPatches}`);
+      } else {
+        lines.push(`Rules: ${entry.summary.rules.length ? entry.summary.rules.join(", ") : "none"}`);
+      }
     }
     if (entry.expected?.length) lines.push(`Expected comparison labels: ${entry.expected.join(", ")}`);
     lines.push("");
   }
+  lines.push("## Auto-Improvement Queue");
+  lines.push("- Rules that dominate the top-recurring list should be reviewed for false positives before adding more heuristics.");
+  lines.push("- Repeated false positives should become `.agentic-reviewrc.json` tuning, stricter context guards, or review-signal classification.");
+  lines.push("- Repeated false negatives should become fixture smoke cases before changing production heuristics.");
+  lines.push("- Severity mismatches should be calibrated with reviewer feedback before changing global defaults.");
+  lines.push("");
   lines.push("## Calibration Notes");
   lines.push("- Compare each packet against human review notes or known post-merge bugs.");
   lines.push("- Mark false positives, false negatives, and severity mismatches in the cases file.");
@@ -247,6 +384,7 @@ const report = {
         ...testCase,
         status: "ok",
         summary: summarizePacket(packet),
+        presentation: casePresentation({ packet }),
         packet,
       };
     } catch (error) {

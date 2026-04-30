@@ -241,6 +241,8 @@ npx agentic-code-review calibrate --repo . --cases-file calibration-cases.json -
 
 Use calibration to tune false positives, false negatives, and severity mismatches before changing generic rules. Use `skills/agentic-code-review/templates/reviewer-feedback.example.json` as the feedback shape for human reviewer outcomes.
 
+Without `--json`, calibration renders a PR-ready Markdown summary with aggregate gates, recurring rules, domains, runtime requirements, suggested patches, and an auto-improvement queue. Use that Markdown in PRs or review reports. Keep the raw JSON as deep evidence for debugging rules, dashboards, or reviewer audits.
+
 ### `agentic-code-review smoke`
 
 Runs the fixture smoke suite for the skill and scripts:

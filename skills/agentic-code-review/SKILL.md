@@ -231,6 +231,7 @@ Project config:
 Calibration:
 - Use `agentic-code-review calibrate --repo <path> --case <name>:<base>:<head>` to run historical PR/commit windows.
 - Use `--feedback-file <json>` with `templates/reviewer-feedback.example.json` shape to aggregate reviewer-marked false positives, false negatives, and severity mismatches.
+- Use the default Markdown output for PR-presentable calibration summaries. Use `--json` only when a reviewer, dashboard, or rule-debugging workflow needs the full packet.
 - Compare packets against human review notes and known post-merge bugs.
 - Record false positives, false negatives, and severity mismatches before changing the skill.
 

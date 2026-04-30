@@ -546,6 +546,29 @@ function shouldScanLine(repo, file, line) {
   return changedLines.has(line);
 }
 
+function shouldTrackDuplicatedLiteral(file, lineText, value) {
+  if (/^\s*(?:import|export)\b/.test(lineText) && /\bfrom\s*["'`]|require\s*\(|import\s*\(/.test(lineText)) return false;
+  if (/\b(className|className=|cn\s*\(|cva\s*\(|class\s*=|variant|variants)\b/.test(lineText)) {
+    if (/^(?:[a-z]+:)*-?[a-z0-9]+(?:-[a-z0-9/[\].:%#]+)+$/i.test(value)) return false;
+    if (/^(button|outline|ghost|default|primary|secondary|sm|md|lg|xl|xs|solid|muted|destructive)$/.test(value)) return false;
+  }
+  if (/^(react|react-dom|sonner|lucide-react|@?[a-z0-9_.-]+\/[a-z0-9_./-]+)$/i.test(value)) return false;
+  if (/^\.\.?\//.test(value)) return false;
+  if (/^[a-z0-9_.-]+\/[a-z0-9_./-]+$/i.test(value) && !/\b(status|state|role|permission|action|type|event|code|scope|provider)\b/i.test(lineText)) return false;
+  if (isTest(file) && /^(user|tenant|org|project|submission|review|file|doc)-?\d+$/i.test(value)) return false;
+  return true;
+}
+
+function isStaticRuleDefinitionWindow(window) {
+  return (/\baddFinding\s*\(|\bsuggestion\s*:|Suggested patch|const patterns\s*=\s*\[/.test(window)
+    && /\b(rule|severity|finding|scan|risk|suggestion|regex|pattern)\b/i.test(window))
+    || (/"[\w-]+"/.test(window) && /\b(findings|repo\.name|window|severity|suggestion|rule)\b/.test(window));
+}
+
+function nearbyStaticRuleDefinition(lines, index, forward = 8) {
+  return isStaticRuleDefinitionWindow(lines.slice(Math.max(0, index - 8), Math.min(index + forward, lines.length)).join("\n"));
+}
+
 function windowTouchesChangedLine(repo, file, startLine, lineCount) {
   const changedLines = repo.changedLines?.get(file);
   if (changedLines === null) return true;
@@ -857,6 +880,7 @@ function scanText(repo) {
         if (isSqlOrMigration(file)) continue;
         if (isAppendOnlyLedger(file)) continue;
         if (ignoredDuplicatedLiterals.has(value)) continue;
+        if (!shouldTrackDuplicatedLiteral(file, lineText, value)) continue;
         const key = `${value}`;
         const record = literalCounts.get(key) || { count: 0, files: new Set() };
         record.count += 1;
@@ -932,8 +956,8 @@ function lineForFirstOccurrence(text, needle) {
 
 function queryPatternForLine(line) {
   const patterns = [
-    /\b(await\s+)?[\w.$]+\.(findMany|findFirst|findUnique|findOne|find|findAll|count|aggregate|groupBy|where|select|insert|save|filter|all|one|first|query)\s*\(/,
-    /\b(session|db|repo|repository|client|prisma|knex|sequelize|mongoose|typeorm|entityManager|em|ActiveRecord|Repo)\b.*\.(query|execute|find|findAll|findOne|where|filter|select|get|all|one|first|save|create|update|delete)\s*\(/i,
+    /\b(await\s+)?[\w.$]+\.(findMany|findFirst|findUnique|findOne|find|findAll|count|aggregate|groupBy|where|select|insert|save|all|one|first|query)\s*\(/,
+    /\b(session|db|repo|repository|client|prisma|knex|sequelize|mongoose|typeorm|entityManager|em|ActiveRecord|Repo)\b.*\.(query|execute|find|findAll|findOne|where|select|get|all|one|first|save|create|update|delete)\s*\(/i,
     /\b(SELECT\s+.+\s+FROM|INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM)\b/i,
     /\b(objects\.(filter|get|create)|Repo\.(all|get|insert|update|delete)|DB::table|Model::where)\b/,
   ];
@@ -942,8 +966,8 @@ function queryPatternForLine(line) {
 
 function readQueryPatternForLine(line) {
   const patterns = [
-    /\b(await\s+)?[\w.$]+\.(findMany|findFirst|findUnique|findOne|find|findAll|count|aggregate|groupBy|where|select|get|filter|all|one|first|query)\s*\(/,
-    /\b(session|db|repo|repository|client|prisma|knex|sequelize|mongoose|typeorm|entityManager|em|ActiveRecord|Repo)\b.*\.(query|execute|find|findAll|findOne|where|filter|select|get|all|one|first)\s*\(/i,
+    /\b(await\s+)?[\w.$]+\.(findMany|findFirst|findUnique|findOne|find|findAll|count|aggregate|groupBy|where|select|get|all|one|first|query)\s*\(/,
+    /\b(session|db|repo|repository|client|prisma|knex|sequelize|mongoose|typeorm|entityManager|em|ActiveRecord|Repo)\b.*\.(query|execute|find|findAll|findOne|where|select|get|all|one|first)\s*\(/i,
     /\bSELECT\s+.+\s+FROM\b/i,
     /\b(objects\.(filter|get)|Repo\.(all|get)|DB::table|Model::where)\b/,
   ];
@@ -992,6 +1016,7 @@ function scanNPlusOne(repo) {
       const window = scopedWindow(lines, index);
       const windowLineCount = window.split(/\r?\n/).length;
       if (!windowTouchesChangedLine(repo, file, line, windowLineCount)) return;
+      if (isStaticRuleDefinitionWindow(window) || nearbyStaticRuleDefinition(lines, index, windowLineCount)) return;
       const hasQueryInWindow = window.split(/\r?\n/).some(queryPatternForLine);
       const signature = `${file}:${line}:${window.replace(/\s+/g, " ").slice(0, 180)}`;
       if (seen.has(signature)) return;
@@ -1055,6 +1080,7 @@ function scanDataConsistency(repo) {
       const line = index + 1;
       const window = lines.slice(index, Math.min(index + 16, lines.length)).join("\n");
       if (!windowTouchesChangedLine(repo, file, line, window.split(/\r?\n/).length)) return;
+      if (isStaticRuleDefinitionWindow(window) || nearbyStaticRuleDefinition(lines, index, 16)) return;
 
       if (readQueryPatternForLine(lineText)
         && !writeQueryPatternForText(lineText)
@@ -1066,12 +1092,14 @@ function scanDataConsistency(repo) {
           addFinding(
             findings,
             "read-then-write-without-transaction",
-            "medium",
+            isTest(file) ? "low" : "medium",
             repo.name,
             file,
             line,
             window,
-            "Check whether the read/write pair needs a transaction, unique constraint, upsert, lock, or optimistic concurrency guard."
+            isTest(file)
+              ? "Test setup read/write sequences can be acceptable. Verify they are isolated, deterministic, and do not hide a production race."
+              : "Check whether the read/write pair needs a transaction, unique constraint, upsert, lock, or optimistic concurrency guard."
           );
         }
       }
@@ -1164,14 +1192,17 @@ function scanRawSqlSecurity(repo) {
 
 function scanWebAndRuntimeSecurity(repo) {
   const findings = [];
+  const uploadFindingsByFile = new Set();
   for (const file of existingFiles(repo.root, repo.entries).filter((value) => isCode(value) && !isTest(value))) {
     const text = readFile(repo.root, file);
+    const fileLevelUploadValidation = /\b(fileFilter|mime|mimetype|contentType|extension|size|limits?\s*:|maxFileSize|maxSize|sanitize|safeOriginalName|assertSafePath|basename|virus|scan|allowlist|storage)\b/i.test(text);
     const lines = text.split(/\r?\n/);
 
     lines.forEach((lineText, index) => {
       const line = index + 1;
       const window = lines.slice(index, Math.min(index + 8, lines.length)).join("\n");
       if (!windowTouchesChangedLine(repo, file, line, window.split(/\r?\n/).length)) return;
+      if (isStaticRuleDefinitionWindow(window) || nearbyStaticRuleDefinition(lines, index, 8)) return;
 
       if (/\b(innerHTML|outerHTML|insertAdjacentHTML)\b|dangerouslySetInnerHTML/.test(lineText)
         && !/\b(DOMPurify|sanitize|sanitizeHtml|trustedTypes|SafeHtml|htmlSafe)\b/i.test(window)) {
@@ -1345,8 +1376,10 @@ function scanWebAndRuntimeSecurity(repo) {
         );
       }
 
-      if (/\b(multer|busboy|formidable|multipart|upload|fileUpload|UploadedFile|IFormFile|MultipartFile)\b/i.test(window)
-        && !/\b(fileFilter|mime|mimetype|contentType|extension|size|limit|sanitize|safeOriginalName|assertSafePath|basename|virus|scan|allowlist|storage)\b/i.test(window)) {
+      if (!uploadFindingsByFile.has(file)
+        && /\b(multer|busboy|formidable|multipart|upload|fileUpload|UploadedFile|IFormFile|MultipartFile|Express\.Multer\.File)\b/i.test(window)
+        && !fileLevelUploadValidation) {
+        uploadFindingsByFile.add(file);
         addFinding(
           findings,
           "file-upload-without-validation",

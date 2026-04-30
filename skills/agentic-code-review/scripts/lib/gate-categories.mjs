@@ -4,7 +4,7 @@ export function findingCategory(finding, isTestFile) {
     return isTestFile(finding.file) ? "review-signal" : "blocking";
   }
   if (finding.rule === "duplicated-literal") {
-    return finding.text.includes("prod files: 0") ? "review-signal" : "blocking";
+    return "review-signal";
   }
   if ([
     "large-file-touched",

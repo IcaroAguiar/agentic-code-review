@@ -1174,6 +1174,13 @@ const calibrationPacket = JSON.parse(calibrationOutput);
 if (calibrationPacket.cases?.[0]?.status !== "ok" || calibrationPacket.feedbackSummary?.falsePositive !== 1) {
   throw new Error("calibration-cli: expected ok calibration case and feedback summary");
 }
+if (!calibrationPacket.cases?.[0]?.presentation?.gate || !Array.isArray(calibrationPacket.cases?.[0]?.presentation?.topRules)) {
+  throw new Error("calibration-cli: expected presentation summary for PR-ready calibration output");
+}
+const calibrationMarkdown = run("node", [join(scriptDir, "calibrate-review-history.mjs"), "--repo", historicalRepo, "--case", `historical:${historicalBase}:${historicalHead}`], historicalRepo);
+expectIncludes("calibration-cli", calibrationMarkdown, "## PR-Ready Summary");
+expectIncludes("calibration-cli", calibrationMarkdown, "## Auto-Improvement Queue");
+expectIncludes("calibration-cli", calibrationMarkdown, "Top recurring rules:");
 console.log("PASS calibration-cli");
 
 const skillText = readFileSync(join(scriptDir, "..", "SKILL.md"), "utf8");
