@@ -112,7 +112,7 @@ Prioritize:
 - error handling, swallowed exceptions, null fallbacks that mask UI error states, non-actionable messages, retries, timeouts, and rollback behavior;
 - observability and resilience: structured logs, correlation IDs, redaction, security/audit events, OpenTelemetry/metrics, external-call timeouts, retry/backoff, circuit breakers, and idempotent retry state;
 - architecture boundaries, responsibility size, hidden coupling, duplicated helper conventions, and circular dependencies;
-- framework-aware boundary fit: Django/Express/Rails route conventions, React/Vue/Svelte template semantics, Tailwind/BEM styling conventions, and separation between presentation, application/domain logic, and data/persistence;
+- framework-aware boundary fit: NestJS controller/provider/DTO boundaries, Express/Next route conventions, Django/Flask/FastAPI auth dependencies, Spring/Rails controller/service boundaries, React/Vue/Svelte template semantics, Tailwind/BEM styling conventions, and separation between presentation, application/domain logic, and data/persistence;
 - patch semantics for optional nested data, especially no-change sentinels, null/undefined deletion semantics, and reset behavior;
 - runtime visual-contract integrity: enum membership normalization, honest icon/visual-style contracts, and sanitized CSS/branding tokens;
 - single responsibility violations, large files that keep accumulating reasons to change, long functions, deep nesting, unnecessary `else` branches, and Object Calisthenics signals when they affect maintainability or risk;
@@ -169,7 +169,7 @@ It checks for signals, not final proof:
 - single-responsibility/refactor gates, long functions, deep nesting, added `else` branches, and multi-responsibility large files;
 - runtime verification requirements for executable changes, large refactors, cross-repo changes, backend boundaries, and regression fixes;
 - package manifest and lockfile/checksum drift;
-- selected framework boundary risks when recognizable.
+- selected framework boundary risks when recognizable, including NestJS controllers that access persistence directly, mutating routes without visible guard/public intent, nested DTO validation without `@Type`, and providers that bypass DI.
 
 The packet normalizes signals into:
 - `blocking`: must be fixed or explicitly justified before approval;
@@ -228,7 +228,7 @@ After editing this skill or its scripts, run:
 node ~/.agents/skills/agentic-code-review/scripts/smoke-review-toolbelt.mjs
 ```
 
-The smoke creates temporary repositories and verifies core gates: SQL injection, N+1, unbounded list queries, REST/API design, GraphQL/gRPC/WebSocket boundaries, observability/resilience, UI semantics/accessibility, advanced a11y, UI performance/bundle signals, architecture boundaries, local artifacts, control blocks not being treated as functions, production/test literal classification, mock-only tests, stale test mocks, narrating comments, happy-path-only tests, local literal paths, backend boundary integration/e2e coverage, and cross-repo contract checks.
+The smoke creates temporary repositories and verifies core gates: SQL injection, N+1, unbounded list queries, REST/API design, NestJS framework boundaries, GraphQL/gRPC/WebSocket boundaries, observability/resilience, UI semantics/accessibility, advanced a11y, UI performance/bundle signals, architecture boundaries, local artifacts, control blocks not being treated as functions, production/test literal classification, mock-only tests, stale test mocks, narrating comments, happy-path-only tests, local literal paths, backend boundary integration/e2e coverage, and cross-repo contract checks.
 
 ## High-Testability Runtime Gate
 

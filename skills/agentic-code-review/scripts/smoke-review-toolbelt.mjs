@@ -587,6 +587,53 @@ export class OrdersController {
     },
   },
   {
+    name: "nestjs-framework-boundaries",
+    files: {
+      "src/orders.controller.ts": `function Controller(path: string) {
+  return function noop() {};
+}
+function Post(path: string) {
+  return function noop() {};
+}
+
+@Controller("/orders")
+export class OrdersController {
+  constructor(private readonly prisma: PrismaService) {}
+
+  @Post("/")
+  async create(body: CreateOrderDto) {
+    return this.prisma.order.create({ data: body });
+  }
+}
+`,
+      "src/create-order.dto.ts": `function ValidateNested() {
+  return function noop() {};
+}
+
+export class CreateOrderDto {
+  @ValidateNested()
+  address!: AddressDto;
+}
+`,
+      "src/orders.service.ts": `function Injectable() {
+  return function noop() {};
+}
+
+@Injectable()
+export class OrdersService {
+  private readonly gateway = new PaymentClient();
+}
+`,
+    },
+    assert(output) {
+      expectIncludes(this.name, output, "nestjs-controller-direct-data-access");
+      expectIncludes(this.name, output, "nestjs-mutating-route-without-auth-signal");
+      expectIncludes(this.name, output, "nestjs-nested-dto-without-type-transform");
+      expectIncludes(this.name, output, "nestjs-provider-bypasses-di");
+      expectIncludes(this.name, output, "For NestJS framework signals");
+    },
+  },
+  {
     name: "ui-semantics-a11y",
     files: {
       "src/pages/DashboardPage.tsx": `export function DashboardPage() {

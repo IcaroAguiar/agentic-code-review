@@ -1480,6 +1480,10 @@ function scanFrameworkSpecific(repo) {
     const text = readFile(repo.root, file);
     const lines = text.split(/\r?\n/);
     const decoratorCount = (text.match(/@(Get|Post|Put|Patch|Delete|MessagePattern|EventPattern)\b/g) || []).length;
+    const isTypeScript = /\.[cm]?tsx?$/.test(file);
+    const isNestController = isTypeScript && /\.controller\.[cm]?ts$/.test(file) && /@Controller\b/.test(text);
+    const isNestProvider = isTypeScript && /\.(service|use-case|handler|processor|resolver|guard|interceptor|strategy)\.[cm]?ts$/.test(file) && /@(Injectable|Resolver|Processor|Catch|Controller)\b/.test(text);
+    const isNestDto = isTypeScript && /\.dto\.[cm]?ts$/.test(file);
 
     if (/\.controller\.[cm]?[tj]s$/.test(file) && lines.length > 240) {
       findings.push({
@@ -1503,6 +1507,66 @@ function scanFrameworkSpecific(repo) {
         text: "DTO file has no obvious validation/serialization decorators.",
         suggestion: "Validate and transform input/output at the boundary or document why validation is external.",
       });
+    }
+
+    if (isNestController && /\b(PrismaService|Repository|DataSource|EntityManager|Model<|\.findMany\s*\(|\.findUnique\s*\(|\.save\s*\(|\.insert\s*\(|\.update\s*\(|\.delete\s*\(|\.\$transaction\s*\(|createQueryBuilder\s*\()\b/.test(text)) {
+      addFinding(
+        findings,
+        "nestjs-controller-direct-data-access",
+        "medium",
+        repo.name,
+        file,
+        lineForFirstOccurrence(text, "PrismaService") !== "-" ? lineForFirstOccurrence(text, "PrismaService") : lineForFirstOccurrence(text, "Repository"),
+        "NestJS controller appears to depend on persistence/query behavior directly.",
+        "Keep controllers thin. Route through an application service/use case/port so validation, authorization, transaction, and orchestration policies stay outside the HTTP adapter."
+      );
+    }
+
+    if (isNestController) {
+      const classGuardSignal = /@(UseGuards|ApiBearerAuth|Public|AllowAnonymous|SkipAuth|Roles|Permissions|Require[A-Za-z0-9_]*|Auth[A-Za-z0-9_]*)\b|\b(AuthGuard|JwtAuthGuard|PermissionsGuard|RolesGuard|CurrentUser|RequestUser)\b/i.test(text);
+      lines.forEach((lineText, index) => {
+        if (!/@(Post|Put|Patch|Delete)\s*\(/.test(lineText)) return;
+        const line = index + 1;
+        if (!shouldScanLine(repo, file, line)) return;
+        const window = lines.slice(Math.max(0, index - 8), Math.min(lines.length, index + 12)).join("\n");
+        if (classGuardSignal || /@(UseGuards|ApiBearerAuth|Public|AllowAnonymous|SkipAuth|Roles|Permissions|Require[A-Za-z0-9_]*|Auth[A-Za-z0-9_]*)\b|\b(AuthGuard|JwtAuthGuard|PermissionsGuard|RolesGuard|CurrentUser|RequestUser)\b/i.test(window)) return;
+        addFinding(
+          findings,
+          "nestjs-mutating-route-without-auth-signal",
+          "low",
+          repo.name,
+          file,
+          line,
+          window,
+          "Mutating NestJS routes should make auth/public intent visible through guards, decorators, request-user extraction, or a documented public-route convention."
+        );
+      });
+    }
+
+    if (isNestDto && /@ValidateNested\b/.test(text) && !/@Type\s*\(\s*\(\s*\)\s*=>/.test(text)) {
+      addFinding(
+        findings,
+        "nestjs-nested-dto-without-type-transform",
+        "medium",
+        repo.name,
+        file,
+        lineForFirstOccurrence(text, "@ValidateNested"),
+        "Nested DTO validation is present without an obvious class-transformer @Type mapping.",
+        "Pair nested DTO validation with @Type(() => NestedDto) so validation runs against the expected class shape instead of silently accepting plain objects."
+      );
+    }
+
+    if (isNestProvider && /\bnew\s+[A-Z][A-Za-z0-9_]*(Service|Repository|Client|Adapter|Gateway|UseCase)\s*\(/.test(text) && !/\bnew\s+(Map|Set|Date|URL|Error|AbortController|Promise)\b/.test(text)) {
+      addFinding(
+        findings,
+        "nestjs-provider-bypasses-di",
+        "medium",
+        repo.name,
+        file,
+        lineForFirstOccurrence(text, "new "),
+        "NestJS provider appears to instantiate another service/repository/client directly.",
+        "Prefer constructor injection or an explicit factory/provider token so lifecycle, mocks, scopes, interceptors, and test boundaries remain controlled by Nest DI."
+      );
     }
 
     if (/\.py$/.test(file) && /\bdef\s+\w+\s*\([^)]*request[^)]*\)/.test(text) && /(views?|routes?|api)\//i.test(file)) {
@@ -2537,6 +2601,10 @@ function runtimeVerificationRequirementsForRepo(repo, findings, repositoryCount)
 
   if (rules.has("rest-route-uses-verb-segment") || rules.has("rest-get-mutating-action-signal") || rules.has("rest-mutation-without-status-signal") || rules.has("rest-list-without-pagination-or-filter-signal") || rules.has("public-rest-route-without-version-signal")) {
     requirements.push("For REST/API design signals, exercise the real route/controller/handler contract, including status code, method semantics, pagination/filter behavior, and OpenAPI/client compatibility when public.");
+  }
+
+  if (rules.has("nestjs-controller-direct-data-access") || rules.has("nestjs-mutating-route-without-auth-signal") || rules.has("nestjs-nested-dto-without-type-transform") || rules.has("nestjs-provider-bypasses-di")) {
+    requirements.push("For NestJS framework signals, exercise the real controller/provider/DTO boundary through Nest testing module, HTTP/integration, or e2e coverage that proves DI, validation pipe behavior, guard/public-route intent, and persistence boundary behavior.");
   }
 
   if (rules.has("graphql-resolver-n-plus-one-or-unbounded-risk") || rules.has("graphql-mutation-without-boundary-controls") || rules.has("graphql-subscription-without-scope-or-backpressure") || rules.has("graphql-introspection-enabled-without-prod-guard")) {

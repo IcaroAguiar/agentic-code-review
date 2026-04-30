@@ -219,7 +219,7 @@ Runs the fixture smoke suite for the skill and scripts:
 npx agentic-code-review smoke
 ```
 
-The smoke suite creates temporary Git repositories under `/private/tmp/agentic-code-review-smoke` and verifies scanner behavior for core cases such as SQL injection, N+1, unbounded list queries, REST/API design, GraphQL/gRPC/WebSocket boundaries, observability/resilience, UI semantics/accessibility, UI performance, architecture boundaries, patch semantics, public contract leaks, UI token validation, large-file signals, cross-repo contracts, historical `--base/--head` ranges, and optional tool selection.
+The smoke suite creates temporary Git repositories under `/private/tmp/agentic-code-review-smoke` and verifies scanner behavior for core cases such as SQL injection, N+1, unbounded list queries, REST/API design, NestJS framework boundaries, GraphQL/gRPC/WebSocket boundaries, observability/resilience, UI semantics/accessibility, UI performance, architecture boundaries, patch semantics, public contract leaks, UI token validation, large-file signals, cross-repo contracts, historical `--base/--head` ranges, and optional tool selection.
 
 It also validates JSON output, project config behavior, domain catalogs, and generic web/runtime/OWASP security signals such as unsafe HTML sinks, command injection, path traversal, weak crypto, permissive CORS, unsafe cookies, SSRF, open redirects, uploads, webhook signatures, retry/backoff gaps, and sensitive-data logging.
 
@@ -311,6 +311,7 @@ The collector currently checks for:
 - observability/resilience signals: unstructured error logs without correlation IDs, security events without audit/metrics, external calls without timeout/retry/circuit-breaker policy, and critical boundaries without instrumentation signals;
 - UI performance signals: network-on-input without debounce/cancellation, blocking render work, and heavy dependencies without bundle-budget evidence;
 - architecture boundary signals: domain imports from outer/framework layers, presentation importing data/persistence directly, missing port/interface boundaries, and UI mixing rendering with direct data access;
+- framework-specific signals: NestJS controllers that access persistence directly, mutating Nest routes without visible guard/public intent, nested DTO validation without class-transformer `@Type`, Nest providers that bypass DI, Django/Flask/FastAPI route auth gaps, Spring controllers that access repositories directly, and Rails broad rescues without observability;
 - public response types that reuse broad internal/domain/persistence types;
 - weak string-only validation for runtime-controlling config, visual tokens, statuses, roles, URLs, modes, and provider values;
 - asymmetric defaults or normalization for configurable runtime objects;
