@@ -57,6 +57,30 @@
       "source": "https://www.npmjs.com/package/madge/v/8.0.0"
     },
     {
+      "name": "graphql-inspector",
+      "recommendedVersion": "latest stable",
+      "purpose": "GraphQL schema compatibility and breaking-change checks",
+      "preferredInstall": "npm install -g @graphql-inspector/cli",
+      "collectorName": "graphql-inspector",
+      "source": "https://the-guild.dev/graphql/inspector"
+    },
+    {
+      "name": "buf",
+      "recommendedVersion": "latest stable",
+      "purpose": "Protobuf/gRPC lint and breaking-change checks",
+      "preferredInstall": "brew install bufbuild/buf/buf",
+      "collectorName": "buf",
+      "source": "https://buf.build/"
+    },
+    {
+      "name": "jdeps",
+      "recommendedVersion": "JDK bundled",
+      "purpose": "Java dependency graph and module boundary inspection",
+      "preferredInstall": "Install a JDK",
+      "collectorName": "jdeps",
+      "source": "https://docs.oracle.com/en/java/javase/"
+    },
+    {
       "name": "osv-scanner",
       "recommendedVersion": "2.3.5",
       "purpose": "dependency vulnerability scanning",
@@ -137,6 +161,14 @@
       "preferredInstall": "brew install llvm",
       "collectorName": "clang-tidy",
       "source": "https://clang.llvm.org/extra/clang-tidy/"
+    },
+    {
+      "name": "clang-callgraph",
+      "recommendedVersion": "latest stable",
+      "purpose": "C/C++ call graph extraction through clang tooling",
+      "preferredInstall": "brew install llvm",
+      "collectorName": "clang-callgraph",
+      "source": "https://clang.llvm.org/"
     },
     {
       "name": "phpstan",
@@ -226,6 +258,22 @@
       "preferredInstall": "npm install -g @axe-core/cli",
       "collectorName": "axe",
       "source": "https://github.com/dequelabs/axe-core-npm"
+    },
+    {
+      "name": "size-limit",
+      "recommendedVersion": "latest stable",
+      "purpose": "Opt-in frontend bundle-size budget check",
+      "preferredInstall": "npm install -D size-limit @size-limit/preset-app",
+      "collectorName": "size-limit",
+      "source": "https://github.com/ai/size-limit"
+    },
+    {
+      "name": "webpack-bundle-analyzer",
+      "recommendedVersion": "latest stable",
+      "purpose": "Opt-in webpack stats bundle analysis",
+      "preferredInstall": "npm install -D webpack-bundle-analyzer",
+      "collectorName": "webpack-bundle-analyzer",
+      "source": "https://github.com/webpack-contrib/webpack-bundle-analyzer"
     },
     {
       "name": "autocannon",

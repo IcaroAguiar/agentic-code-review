@@ -638,6 +638,119 @@ export function OrdersPage() {
     },
   },
   {
+    name: "graphql-grpc-realtime",
+    files: {
+      "src/graphql/order.resolver.ts": `export const resolvers = {
+  Query: {
+    orders: () => prisma.order.findMany({ where: { archived: false } }),
+  },
+  Mutation: {
+    deleteOrder: (_root, args) => prisma.order.delete({ where: { id: args.id } }),
+  },
+  Subscription: {
+    orderUpdated: { subscribe: () => pubsub.subscribe("ORDER_UPDATED") },
+  },
+};
+
+export const server = new ApolloServer({ introspection: true, playground: true });
+`,
+      "proto/orders.proto": `syntax = "proto3";
+service OrdersService {
+  rpc CreateOrder (CreateOrderRequest) returns (Order) {}
+}
+message CreateOrderRequest {
+  string id = 1;
+}
+message Order {
+  string id = 1;
+}
+`,
+      "src/websocket/orders.socket.ts": `export function attach(io) {
+  io.on("connection", (socket) => {
+    socket.on("orders:subscribe", (payload) => socket.join(payload.channel));
+    socket.emit("ready");
+  });
+}
+`,
+    },
+    assert(output) {
+      expectIncludes(this.name, output, "graphql-resolver-n-plus-one-or-unbounded-risk");
+      expectIncludes(this.name, output, "graphql-mutation-without-boundary-controls");
+      expectIncludes(this.name, output, "graphql-subscription-without-scope-or-backpressure");
+      expectIncludes(this.name, output, "graphql-introspection-enabled-without-prod-guard");
+      expectIncludes(this.name, output, "grpc-proto-without-compatibility-signal");
+      expectIncludes(this.name, output, "websocket-handler-without-auth-or-backpressure");
+      expectIncludes(this.name, output, "For GraphQL signals");
+      expectIncludes(this.name, output, "For gRPC/WebSocket/realtime signals");
+    },
+  },
+  {
+    name: "observability-resilience",
+    files: {
+      ".agentic-reviewrc.json": `{"appType":"microservice"}`,
+      "src/services/payment-client.ts": `export async function charge(req) {
+  try {
+    return await fetch(req.body.callbackUrl);
+  } catch (error) {
+    logger.error("payment failed", error);
+    throw error;
+  }
+}
+`,
+      "src/routes/auth.ts": `export async function loginHandler(req) {
+  try {
+    return await authenticate(req.body);
+  } catch (error) {
+    throw new Error("access denied");
+  }
+}
+`,
+    },
+    assert(output) {
+      expectIncludes(this.name, output, "external-call-without-timeout-or-resilience");
+      expectIncludes(this.name, output, "critical-boundary-without-instrumentation-signal");
+      expectIncludes(this.name, output, "unstructured-error-log-without-correlation");
+      expectIncludes(this.name, output, "security-event-without-observability-signal");
+      expectIncludes(this.name, output, "For observability/resilience signals");
+    },
+  },
+  {
+    name: "advanced-a11y-and-ui-performance",
+    files: {
+      "src/layout/AppShell.tsx": `export function AppShell() {
+  return (
+    <div>
+      <nav>Menu</nav>
+      <main>
+        <button role="button" tabIndex={2} aria-label="">Salvar</button>
+        <div aria-hidden="true" onClick={() => save()} tabIndex={0}>Hidden action</div>
+        <input className="focus:outline-none" />
+      </main>
+    </div>
+  );
+}
+`,
+      "src/components/SearchBox.tsx": `export function SearchBox({ items }) {
+  const parsed = JSON.parse(localStorage.getItem("cache") || "[]");
+  return <input onChange={(event) => fetch("/api/search?q=" + event.target.value)} value={parsed.length} />;
+}
+`,
+      "package.json": `{"dependencies":{"monaco-editor":"latest"}}`,
+    },
+    assert(output) {
+      expectIncludes(this.name, output, "positive-tabindex-a11y-risk");
+      expectIncludes(this.name, output, "redundant-or-conflicting-aria-role");
+      expectIncludes(this.name, output, "aria-misuse-a11y-risk");
+      expectIncludes(this.name, output, "focus-visible-style-missing");
+      expectIncludes(this.name, output, "missing-skip-link-for-repeated-navigation");
+      expectIncludes(this.name, output, "ui-network-on-input-without-debounce");
+      expectIncludes(this.name, output, "ui-render-blocking-work-signal");
+      expectIncludes(this.name, output, "heavy-dependency-without-bundle-budget");
+      expectIncludes(this.name, output, "For advanced accessibility signals");
+      expectIncludes(this.name, output, "For UI performance/bundle signals");
+    },
+  },
+  {
     name: "backend-boundary-without-integration",
     files: {
       "src/users.controller.ts": `export class UsersController {
@@ -782,16 +895,26 @@ const adaptiveToolRepo = createRepo("adaptive-language-tools", {
   "src/index.php": `<?php echo "ok";`,
   "src/App.tsx": `export function App() { return <img src="/logo.png" />; }`,
   "eslint.config.js": `export default [];`,
+  "schema.graphql": `type Query { viewer: String }`,
+  "proto/service.proto": `syntax = "proto3"; service Demo { rpc Ping (PingRequest) returns (PingResponse); } message PingRequest { string id = 1; } message PingResponse { string id = 1; }`,
 });
 const adaptiveToolOutput = collect(adaptiveToolRepo);
 expectIncludes("adaptive-language-tools", adaptiveToolOutput, "spotbugs");
 expectIncludes("adaptive-language-tools", adaptiveToolOutput, "findsecbugs");
+expectIncludes("adaptive-language-tools", adaptiveToolOutput, "jdeps");
+expectIncludes("adaptive-language-tools", adaptiveToolOutput, "buf");
 expectIncludes("adaptive-language-tools", adaptiveToolOutput, "cppcheck");
 expectIncludes("adaptive-language-tools", adaptiveToolOutput, "clang-tidy");
 expectIncludes("adaptive-language-tools", adaptiveToolOutput, "phpstan");
 expectIncludes("adaptive-language-tools", adaptiveToolOutput, "psalm");
 expectIncludes("adaptive-language-tools", adaptiveToolOutput, "eslint-jsx-a11y");
 console.log("PASS adaptive-language-tools");
+
+const selectedGraphqlToolOutput = collect(adaptiveToolRepo, ["--external-tool", "graphql-inspector"]);
+expectIncludes("graphql-tool-selection", selectedGraphqlToolOutput, "Selected tools: graphql-inspector");
+expectIncludes("graphql-tool-selection", selectedGraphqlToolOutput, "graphql-inspector");
+expectNotIncludes("graphql-tool-selection", selectedGraphqlToolOutput, "size-limit");
+console.log("PASS graphql-tool-selection");
 
 const jsonOutput = collect(historicalRepo, ["--base", historicalBase, "--head", historicalHead, "--json"]);
 const jsonPacket = JSON.parse(jsonOutput);
@@ -804,6 +927,8 @@ const configuredRepo = createRepo("configured-rules", {
   ".agentic-reviewrc.json": `{
   "rules": { "magic-string": false },
   "customQuestions": ["Custom checkpoint?"],
+  "domainCatalogs": ["education"],
+  "customDomainQuestions": { "education": ["Custom education checkpoint?"] },
   "ignorePaths": ["ignored/**"]
 }
 `,
@@ -818,6 +943,8 @@ const configuredOutput = collect(configuredRepo);
 expectNotIncludes("configured-rules", configuredOutput, "] magic-string at");
 expectNotIncludes("configured-rules", configuredOutput, "ignored/debug.ts");
 expectIncludes("configured-rules", configuredOutput, "Custom checkpoint?");
+expectIncludes("configured-rules", configuredOutput, "Educação:");
+expectIncludes("configured-rules", configuredOutput, "Custom education checkpoint?");
 console.log("PASS configured-rules");
 
 const calibrationOutput = run("node", [join(scriptDir, "calibrate-review-history.mjs"), "--repo", historicalRepo, "--case", `historical:${historicalBase}:${historicalHead}`, "--json"], historicalRepo);
@@ -847,9 +974,15 @@ expectIncludes("owasp-expanded-docs", skillText, "OWASP");
 expectIncludes("owasp-expanded-docs", skillText, "domainCatalogs");
 expectIncludes("owasp-expanded-docs", skillText, "zap-baseline");
 expectIncludes("web-api-architecture-docs", skillText, "REST/API design risks");
+expectIncludes("web-api-architecture-docs", skillText, "GraphQL/gRPC/WebSocket risks");
+expectIncludes("web-api-architecture-docs", skillText, "observability and resilience");
+expectIncludes("web-api-architecture-docs", skillText, "advanced accessibility risks");
+expectIncludes("web-api-architecture-docs", skillText, "UI performance risks");
 expectIncludes("web-api-architecture-docs", skillText, "UI semantics/accessibility risks");
 expectIncludes("web-api-architecture-docs", skillText, "architecture/layering signals");
 expectIncludes("web-api-architecture-docs", skillText, "spotbugs");
+expectIncludes("web-api-architecture-docs", skillText, "graphql-inspector");
+expectIncludes("web-api-architecture-docs", skillText, "customDomainQuestions");
 expectIncludes("web-api-architecture-docs", skillText, "appType");
 expectIncludes("browser-use-first-for-web-qa", skillText, "Web UI/browser changes, with the main agent using browser-use first");
 expectIncludes("authenticated-smoke-credentials", skillText, "do not accept \"login failed\" or \"stopped at login\" as sufficient evidence");
@@ -859,4 +992,4 @@ expectIncludes("authenticated-smoke-credentials", qaEvidenceText, "Credential cr
 expectNotIncludes("no-local-user-paths", skillText, "/Users/");
 console.log("PASS public-skill-contract");
 
-console.log(`PASS ${cases.length + 9}/${cases.length + 9} agentic-code-review smoke cases`);
+console.log(`PASS ${cases.length + 10}/${cases.length + 10} agentic-code-review smoke cases`);

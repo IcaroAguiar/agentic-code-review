@@ -13,5 +13,25 @@
     "Dados clinicos seguem acesso minimo e auditoria de acesso sensivel?",
     "Consentimento e finalidade de uso seguem preservados?",
     "Exports, notificacoes e logs evitam informacao medica identificavel?"
+  ],
+  "ecommerce": [
+    "Checkout, pagamento, cupom, estoque e reembolso sao idempotentes e auditaveis?",
+    "Dados de cartao ou pagamento seguem minimizacao e PCI DSS?",
+    "Fraude, duplicidade e reconciliacao foram testadas em caminhos de falha?"
+  ],
+  "education": [
+    "Matriculas, progresso, notas e certificados preservam autorizacao por aluno/turma/curso?",
+    "Dados de menores ou responsaveis seguem privacidade, consentimento e retencao adequados?",
+    "Mudancas em aulas/modulos mantem compatibilidade com historico e relatórios?"
+  ],
+  "social": [
+    "Visibilidade de perfil/feed respeita bloqueios, privacidade e moderacao?",
+    "Denuncias, conteudo sensivel e usuarios menores seguem controles antiabuso e COPPA quando aplicavel?",
+    "Eventos sociais evitam amplificar spam, duplicidade ou vazamento entre tenants/usuarios?"
+  ],
+  "iot": [
+    "Comandos de dispositivo exigem autorizacao forte e replay protection?",
+    "Telemetria e firmware preservam integridade, versionamento e observabilidade de falhas?",
+    "Rate limits e backpressure protegem gateways, sensores e filas?"
   ]
 }

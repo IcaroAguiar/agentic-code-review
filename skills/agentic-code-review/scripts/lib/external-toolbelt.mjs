@@ -45,6 +45,7 @@ export function externalToolbelt(repo, shouldRun, allowDownloads = false, select
   const dastTarget = repo.config?.dastTargets?.[0] || "";
   const performanceTarget = repo.config?.performanceTargets?.[0] || "";
   const a11yTarget = repo.config?.a11yTargets?.[0] || "";
+  const bundleStatsPath = repo.config?.bundleStatsPath || "";
   const firstCppFile = repo.entries.find((entry) => /\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$/i.test(entry.path))?.path || "";
   const rubyUserGemBins = (() => {
     const home = process.env.HOME || "";
@@ -233,6 +234,63 @@ export function externalToolbelt(repo, shouldRun, allowDownloads = false, select
       ],
       installHint: "npm install -g madge",
       runWhen: () => repo.entries.some((entry) => /\.[cm]?[tj]sx?$/.test(entry.path)),
+    },
+    {
+      name: "graphql-inspector",
+      purpose: "GraphQL schema compatibility and breaking-change checks",
+      candidates: [
+        {
+          command: "graphql-inspector",
+          args: ["diff", repo.config?.graphqlBaseSchema || "schema.graphql", repo.config?.graphqlHeadSchema || "schema.graphql"],
+          downloads: false,
+        },
+        {
+          command: "npx",
+          args: ["--yes", "@graphql-inspector/cli", "diff", repo.config?.graphqlBaseSchema || "schema.graphql", repo.config?.graphqlHeadSchema || "schema.graphql"],
+          downloads: true,
+        },
+      ],
+      installHint: "npm install -g @graphql-inspector/cli",
+      runWhen: () => selected.has("graphql-inspector") && repo.entries.some((entry) => /\.(graphql|gql)$|(^|\/)(graphql|schema)\//i.test(entry.path)),
+    },
+    {
+      name: "buf",
+      purpose: "Protobuf/gRPC lint and breaking-change checks",
+      candidates: [
+        {
+          command: "buf",
+          args: ["lint"],
+          downloads: false,
+        },
+      ],
+      installHint: "brew install bufbuild/buf/buf",
+      runWhen: () => repo.entries.some((entry) => /\.proto$|(^|\/)buf\.(yaml|gen\.yaml)$/.test(entry.path)),
+    },
+    {
+      name: "jdeps",
+      purpose: "Java dependency graph and module boundary inspection",
+      candidates: [
+        {
+          command: "jdeps",
+          args: ["--recursive", repo.root],
+          downloads: false,
+        },
+      ],
+      installHint: "Install a JDK and ensure jdeps is on PATH",
+      runWhen: () => repo.entries.some((entry) => /\.(java|jar)$|(^|\/)(pom\.xml|build\.gradle|build\.gradle\.kts)$/.test(entry.path)),
+    },
+    {
+      name: "clang-callgraph",
+      purpose: "C/C++ call graph extraction through clang tooling",
+      candidates: [
+        {
+          command: "clang++",
+          args: firstCppFile ? ["-Xclang", "-analyze", "-Xclang", "-analyzer-checker=debug.ViewCallGraph", "-fsyntax-only", firstCppFile] : ["--version"],
+          downloads: false,
+        },
+      ],
+      installHint: "brew install llvm and ensure clang++ is on PATH",
+      runWhen: () => selected.has("clang-callgraph") && Boolean(firstCppFile),
     },
     {
       name: "osv-scanner",
@@ -543,6 +601,42 @@ export function externalToolbelt(repo, shouldRun, allowDownloads = false, select
       ],
       installHint: "npm install -g @axe-core/cli",
       runWhen: () => selected.has("axe") && Boolean(a11yTarget),
+    },
+    {
+      name: "size-limit",
+      purpose: "Opt-in frontend bundle-size budget check",
+      candidates: [
+        {
+          command: "size-limit",
+          args: [],
+          downloads: false,
+        },
+        {
+          command: "npx",
+          args: ["--yes", "size-limit"],
+          downloads: true,
+        },
+      ],
+      installHint: "npm install -D size-limit @size-limit/preset-app",
+      runWhen: () => selected.has("size-limit") && repo.entries.some((entry) => /(^|\/)(package\.json|vite\.config|webpack\.config|next\.config)/.test(entry.path)),
+    },
+    {
+      name: "webpack-bundle-analyzer",
+      purpose: "Opt-in webpack stats bundle analysis",
+      candidates: [
+        {
+          command: "webpack-bundle-analyzer",
+          args: bundleStatsPath ? [bundleStatsPath, "--mode", "static", "--no-open", "--report", "/tmp/agentic-code-review-bundle-report.html"] : ["--version"],
+          downloads: false,
+        },
+        {
+          command: "npx",
+          args: bundleStatsPath ? ["--yes", "webpack-bundle-analyzer", bundleStatsPath, "--mode", "static", "--no-open", "--report", "/tmp/agentic-code-review-bundle-report.html"] : ["--yes", "webpack-bundle-analyzer", "--version"],
+          downloads: true,
+        },
+      ],
+      installHint: "npm install -D webpack-bundle-analyzer and configure bundleStatsPath",
+      runWhen: () => selected.has("webpack-bundle-analyzer") && Boolean(bundleStatsPath),
     },
     {
       name: "autocannon",

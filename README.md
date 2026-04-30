@@ -42,6 +42,9 @@ agentic-code-review/
         transaction-rollback-test.vitest.ts
         validation-boundary-test.vitest.ts
         rest-api-contract-test.vitest.ts
+        graphql-boundary-test.vitest.ts
+        realtime-protocol-test.vitest.ts
+        observability-resilience-test.vitest.ts
         openapi-compatibility-test.vitest.ts
         ui-semantic-a11y-test.vitest.ts
         layer-boundary-test.vitest.ts
@@ -187,11 +190,14 @@ Supported fields:
 - `thresholds`: tune file size, function length, import count, refactor, and constructor-width thresholds.
 - `ignorePaths`: ignore generated or project-specific paths using simple glob-like patterns.
 - `customQuestions`: add project/business checkpoints to every packet.
+- `customDomainQuestions`: add project-defined domain catalogs without changing the skill.
 - `domainCatalogs`: add built-in LGPD/privacy, finance, or health review checkpoints.
 - `appType`: tune adaptive thresholds for `monolith`, `microservice`, `public-api`, `frontend`, or `library`.
 - `dastTargets`: staging URLs for explicit OWASP ZAP baseline scans.
 - `performanceTargets`: URLs for explicit `autocannon`/`wrk` load smoke runs.
 - `a11yTargets`: rendered UI URLs for explicit axe accessibility scans.
+- `graphqlBaseSchema` / `graphqlHeadSchema`: schema paths for explicit GraphQL Inspector compatibility checks.
+- `bundleStatsPath`: stats file path for explicit bundle analysis.
 - `externalToolTimeoutMs`: set the default optional tool timeout for that repository.
 
 ### `agentic-code-review calibrate`
@@ -213,7 +219,7 @@ Runs the fixture smoke suite for the skill and scripts:
 npx agentic-code-review smoke
 ```
 
-The smoke suite creates temporary Git repositories under `/private/tmp/agentic-code-review-smoke` and verifies scanner behavior for core cases such as SQL injection, N+1, unbounded list queries, REST/API design, UI semantics/accessibility, architecture boundaries, patch semantics, public contract leaks, UI token validation, large-file signals, cross-repo contracts, historical `--base/--head` ranges, and optional tool selection.
+The smoke suite creates temporary Git repositories under `/private/tmp/agentic-code-review-smoke` and verifies scanner behavior for core cases such as SQL injection, N+1, unbounded list queries, REST/API design, GraphQL/gRPC/WebSocket boundaries, observability/resilience, UI semantics/accessibility, UI performance, architecture boundaries, patch semantics, public contract leaks, UI token validation, large-file signals, cross-repo contracts, historical `--base/--head` ranges, and optional tool selection.
 
 It also validates JSON output, project config behavior, domain catalogs, and generic web/runtime/OWASP security signals such as unsafe HTML sinks, command injection, path traversal, weak crypto, permissive CORS, unsafe cookies, SSRF, open redirects, uploads, webhook signatures, retry/backoff gaps, and sensitive-data logging.
 
@@ -299,7 +305,11 @@ The collector currently checks for:
 - external side effects inside transactions;
 - public/API response mappers that expose raw, internal, legacy, or domain state without sanitization;
 - REST/API route design signals: verb-oriented paths, unsafe GET mutation signals, mutation status-code ambiguity, collection routes without pagination/filter contracts, and public routes without visible versioning strategy;
+- GraphQL/gRPC/WebSocket signals: resolver N+1 or unbounded reads, mutations without boundary controls, subscriptions without scope/backpressure, production introspection signals, protobuf compatibility/versioning gaps, and realtime handlers without auth/backpressure;
 - UI semantic and accessibility signals: missing image alternatives, unlabeled inputs, clickable divs without keyboard semantics, link/button semantic drift, and page/layout files with many divs but no landmarks;
+- advanced accessibility signals: positive tabindex, ARIA misuse, missing focus-visible replacement, and missing skip links for repeated navigation;
+- observability/resilience signals: unstructured error logs without correlation IDs, security events without audit/metrics, external calls without timeout/retry/circuit-breaker policy, and critical boundaries without instrumentation signals;
+- UI performance signals: network-on-input without debounce/cancellation, blocking render work, and heavy dependencies without bundle-budget evidence;
 - architecture boundary signals: domain imports from outer/framework layers, presentation importing data/persistence directly, missing port/interface boundaries, and UI mixing rendering with direct data access;
 - public response types that reuse broad internal/domain/persistence types;
 - weak string-only validation for runtime-controlling config, visual tokens, statuses, roles, URLs, modes, and provider values;
@@ -350,6 +360,9 @@ The built-in scanner works without external dependencies. For deeper review, ins
 | `lizard` | Complexity and long functions |
 | `dependency-cruiser` | JS/TS dependency boundaries and cycles |
 | `madge` | JS/TS circular dependencies |
+| `graphql-inspector` | Opt-in GraphQL schema compatibility checks |
+| `buf` | Protobuf/gRPC lint and breaking-change checks |
+| `jdeps` / `clang-callgraph` | Java and C/C++ call graph/dependency inspection |
 | `osv-scanner` | Dependency vulnerability scanning |
 | `bandit` / `pip-audit` | Python security and dependency vulnerability scanning |
 | `gosec` / `govulncheck` | Go security and vulnerability scanning |
@@ -358,6 +371,7 @@ The built-in scanner works without external dependencies. For deeper review, ins
 | `cppcheck` / `clang-tidy` | C/C++ static analysis |
 | `phpstan` / `psalm` | PHP static analysis |
 | `eslint-jsx-a11y` / `axe` | UI accessibility linting and opt-in rendered-page scans |
+| `size-limit` / `webpack-bundle-analyzer` | Opt-in bundle-size and stats analysis |
 | `trivy` / `grype` / `checkov` / `regula` | Containers, dependencies, and IaC scanning |
 | `autocannon` / `wrk` / `zap-baseline` | Opt-in load and DAST checks for configured targets |
 
@@ -469,6 +483,18 @@ Use it for:
 ### `rest-api-contract-test.vitest.ts`
 
 Example test shape for proving REST method semantics, status codes, pagination, filters, and resource-oriented routes through the real HTTP boundary.
+
+### `graphql-boundary-test.vitest.ts`
+
+Example test shape for proving GraphQL auth, pagination/complexity limits, DataLoader/batching, and bounded resolver query count.
+
+### `realtime-protocol-test.vitest.ts`
+
+Example test shape for WebSocket/subscription authorization, scoped delivery, disconnect cleanup, and backpressure-sensitive behavior.
+
+### `observability-resilience-test.vitest.ts`
+
+Example test shape for timeout/retry/circuit-breaker behavior plus safe logs, metrics, and correlation identifiers.
 
 ### `openapi-compatibility-test.vitest.ts`
 

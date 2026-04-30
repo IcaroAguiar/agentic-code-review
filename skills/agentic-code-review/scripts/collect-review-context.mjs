@@ -123,6 +123,7 @@ const defaultConfig = {
   appType: "",
   ignorePaths: [],
   customQuestions: [],
+  customDomainQuestions: {},
   domainCatalogs: [],
   dastTargets: [],
   performanceTargets: [],
@@ -157,6 +158,7 @@ function mergeConfig(base, override) {
     thresholds: { ...(base.thresholds || {}), ...adaptiveThresholds, ...(override.thresholds || {}) },
     ignorePaths: [...(base.ignorePaths || []), ...(override.ignorePaths || [])],
     customQuestions: [...(base.customQuestions || []), ...(override.customQuestions || [])],
+    customDomainQuestions: { ...(base.customDomainQuestions || {}), ...(override.customDomainQuestions || {}) },
     domainCatalogs: [...(base.domainCatalogs || []), ...(override.domainCatalogs || [])],
     dastTargets: [...(base.dastTargets || []), ...(override.dastTargets || [])],
     performanceTargets: [...(base.performanceTargets || []), ...(override.performanceTargets || [])],
@@ -1386,14 +1388,100 @@ function scanUnboundedDataAccess(repo) {
   return findings;
 }
 
+function scanObservabilityAndResilience(repo) {
+  const findings = [];
+  const serviceLikePath = /(^|\/)(services?|clients?|gateways?|adapters?|integrations?|jobs?|workers?|controllers?|routes?|handlers?|repositories?)\//i;
+
+  for (const file of existingFiles(repo.root, repo.entries).filter((value) => isCode(value) && !isTest(value))) {
+    if (changedLineCount(repo, file) === 0) continue;
+    const text = readFile(repo.root, file);
+    const lines = text.split(/\r?\n/);
+    const appType = repo.config.appType || "";
+    const emitted = new Set();
+
+    lines.forEach((lineText, index) => {
+      const line = index + 1;
+      const window = lines.slice(Math.max(0, index - 5), Math.min(lines.length, index + 10)).join("\n");
+      if (!windowTouchesChangedLine(repo, file, Math.max(1, line - 5), window.split(/\r?\n/).length)) return;
+
+      if (/\b(logger\.(error|warn)|console\.(error|warn))\s*\(/.test(lineText)
+        && /\b(error|exception|failed|unauthorized|forbidden|denied|auth|permission|request)\b/i.test(window)
+        && !/\b(requestId|correlationId|traceId|spanId|tenantId|userId|redact|sanitize|safeLog|metadata|context)\b/i.test(window)) {
+        addFinding(
+          findings,
+          "unstructured-error-log-without-correlation",
+          "medium",
+          repo.name,
+          file,
+          line,
+          window,
+          "Operational error logs should be structured and include safe correlation identifiers such as requestId/traceId/tenantId, with sensitive fields redacted."
+        );
+      }
+
+      if (/\b(catch\s*\(|except\s+|rescue\s+)/.test(lineText)
+        && /\b(auth|login|permission|forbidden|unauthorized|access denied|denied|token|session)\b/i.test(window)
+        && !/\b(audit|securityLog|logger|metrics|counter|trace|span|record[A-Z]?Event)\b/i.test(window)) {
+        addFinding(
+          findings,
+          "security-event-without-observability-signal",
+          "medium",
+          repo.name,
+          file,
+          line,
+          window,
+          "Auth/permission failures should produce safe audit/log/metric signals so operations can detect abuse and regressions."
+        );
+      }
+
+      if (/\b(fetch|axios|request|http\.request|http\.get|grpc|GraphQLClient|PrismaClient|new\s+[A-Z][A-Za-z0-9_]*Client)\b/.test(window)
+        && serviceLikePath.test(file)
+        && !/\b(timeout|AbortController|signal|deadline|cancelToken|retry|backoff|circuitBreaker|breaker|bulkhead)\b/i.test(window)
+        && !emitted.has("external-call-without-timeout-or-resilience")) {
+        emitted.add("external-call-without-timeout-or-resilience");
+        addFinding(
+          findings,
+          "external-call-without-timeout-or-resilience",
+          appType === "microservice" || appType === "public-api" ? "medium" : "low",
+          repo.name,
+          file,
+          line,
+          window,
+          "External service calls should define timeout/deadline behavior and, when critical, retry/backoff/circuit-breaker policy."
+        );
+      }
+
+      if ((appType === "microservice" || appType === "public-api")
+        && /\b(controllers?|handlers?|routes?|jobs?|workers?|consumer|message|request)\b/i.test(file + "\n" + window)
+        && !/\b(OpenTelemetry|otel|trace|span|meter|metrics|prometheus|histogram|counter|duration|latency)\b/i.test(text)
+        && !emitted.has("critical-boundary-without-instrumentation-signal")) {
+        emitted.add("critical-boundary-without-instrumentation-signal");
+        addFinding(
+          findings,
+          "critical-boundary-without-instrumentation-signal",
+          "low",
+          repo.name,
+          file,
+          line,
+          "No OpenTelemetry/metrics signal detected in changed critical boundary.",
+          "For public APIs and microservices, consider trace/span and metrics coverage for latency, error rate, and saturation on critical boundaries."
+        );
+      }
+    });
+  }
+
+  return findings;
+}
+
 function scanFrameworkSpecific(repo) {
   const findings = [];
-  for (const file of existingFiles(repo.root, repo.entries).filter((value) => /\.(controller|service|repository|resolver|guard|interceptor|dto)\.[cm]?[tj]s$/.test(value))) {
+  for (const file of existingFiles(repo.root, repo.entries).filter((value) => isCode(value) && !isTest(value))) {
+    if (changedLineCount(repo, file) === 0) continue;
     const text = readFile(repo.root, file);
     const lines = text.split(/\r?\n/);
     const decoratorCount = (text.match(/@(Get|Post|Put|Patch|Delete|MessagePattern|EventPattern)\b/g) || []).length;
 
-    if (/\.controller\./.test(file) && lines.length > 240) {
+    if (/\.controller\.[cm]?[tj]s$/.test(file) && lines.length > 240) {
       findings.push({
         rule: "large-controller",
         severity: "medium",
@@ -1405,7 +1493,7 @@ function scanFrameworkSpecific(repo) {
       });
     }
 
-    if (/\.dto\./.test(file) && !/@(Is|Validate|Array|Type|Transform|Expose|ApiProperty)/.test(text)) {
+    if (/\.dto\.[cm]?[tj]s$/.test(file) && !/@(Is|Validate|Array|Type|Transform|Expose|ApiProperty)/.test(text)) {
       findings.push({
         rule: "dto-without-validation-signal",
         severity: "medium",
@@ -1415,6 +1503,48 @@ function scanFrameworkSpecific(repo) {
         text: "DTO file has no obvious validation/serialization decorators.",
         suggestion: "Validate and transform input/output at the boundary or document why validation is external.",
       });
+    }
+
+    if (/\.py$/.test(file) && /\bdef\s+\w+\s*\([^)]*request[^)]*\)/.test(text) && /(views?|routes?|api)\//i.test(file)) {
+      const protectedSignal = /\b(login_required|permission_required|IsAuthenticated|authentication_classes|permission_classes|Depends\s*\(|current_user|jwt_required|auth_required)\b/i.test(text);
+      if (!protectedSignal && /\b(POST|PUT|PATCH|DELETE|create|update|delete|admin|private|account)\b/i.test(text)) {
+        addFinding(
+          findings,
+          "python-route-without-auth-signal",
+          "medium",
+          repo.name,
+          file,
+          "-",
+          "Django/Flask/FastAPI route-like file has mutating/private signals without an obvious auth decorator/dependency.",
+          "Add or verify route-level authentication/permission dependencies such as login_required, permission_classes, Depends(current_user), or project-equivalent guards."
+        );
+      }
+    }
+
+    if (/\.java$/.test(file) && /\b@RestController\b/.test(text) && /\bnew\s+[A-Z][A-Za-z0-9_]*Repository|\.findAll\s*\(|\.save\s*\(/.test(text)) {
+      addFinding(
+        findings,
+        "spring-controller-accesses-repository-directly",
+        "medium",
+        repo.name,
+        file,
+        lineForFirstOccurrence(text, "Repository"),
+        "Spring controller appears to access persistence/repository behavior directly.",
+        "Keep Spring controllers thin and route through application/service boundaries with validation, transaction, and authorization policy in the proper layer."
+      );
+    }
+
+    if (/\.rb$/.test(file) && /(controllers?|jobs?|services?)\//i.test(file) && /\brescue\s+(Exception|StandardError)\b/.test(text) && !/\braise|logger|notify|Sentry|Honeybadger|Rollbar|context|ensure\b/i.test(text)) {
+      addFinding(
+        findings,
+        "rails-broad-exception-without-observability",
+        "medium",
+        repo.name,
+        file,
+        lineForFirstOccurrence(text, "rescue"),
+        "Ruby/Rails code rescues a broad exception without obvious rethrow/log/monitoring context.",
+        "Rescue specific errors, preserve context, log/notify safely, and avoid swallowing operational failures."
+      );
     }
   }
   return findings;
@@ -1511,6 +1641,124 @@ function scanRestApiDesign(repo) {
   return findings;
 }
 
+function scanGraphqlGrpcRealtimeDesign(repo) {
+  const findings = [];
+  const apiFilePattern = /\.(graphql|proto)$|(^|\/)(graphql|resolvers?|subscriptions?|grpc|proto|websocket|websockets|socket|sockets|channels?|hubs?)\//i;
+
+  for (const file of existingFiles(repo.root, repo.entries).filter((value) => (isCode(value) || /\.(graphql|proto)$/i.test(value)) && !isTest(value) && apiFilePattern.test(value))) {
+    if (changedLineCount(repo, file) === 0) continue;
+    const text = readFile(repo.root, file);
+    const lines = text.split(/\r?\n/);
+    const emitted = new Set();
+
+    lines.forEach((lineText, index) => {
+      const line = index + 1;
+      const window = lines.slice(Math.max(0, index - 3), Math.min(lines.length, index + 10)).join("\n");
+      if (!windowTouchesChangedLine(repo, file, Math.max(1, line - 3), window.split(/\r?\n/).length)) return;
+
+      if ((/\b(type\s+Query|query\s+|Query:|@Query|resolver|ResolveField)\b/i.test(window) || /(graphql|resolver)/i.test(file))
+        && /\b(findMany|findAll|list|where|repository|prisma|typeorm|sequelize|mongoose)\b/i.test(window)
+        && !/\b(DataLoader|batch|loader|include|select|join|paginate|limit|first|after|cursor|connection)\b/i.test(window)
+        && !emitted.has("graphql-resolver-n-plus-one-or-unbounded-risk")) {
+        emitted.add("graphql-resolver-n-plus-one-or-unbounded-risk");
+        addFinding(
+          findings,
+          "graphql-resolver-n-plus-one-or-unbounded-risk",
+          "medium",
+          repo.name,
+          file,
+          line,
+          window,
+          "GraphQL resolvers need batching/DataLoader and explicit pagination/connection limits; otherwise nested fields can create N+1 queries or unbounded reads."
+        );
+      }
+
+      if (/\b(mutation|Mutation|@Mutation)\b/i.test(window)
+        && !/\b(auth|authorize|permission|role|guard|policy|tenant|rateLimit|throttle|csrf|idempotency)\b/i.test(window)
+        && !emitted.has("graphql-mutation-without-boundary-controls")) {
+        emitted.add("graphql-mutation-without-boundary-controls");
+        addFinding(
+          findings,
+          "graphql-mutation-without-boundary-controls",
+          "medium",
+          repo.name,
+          file,
+          line,
+          window,
+          "GraphQL mutations should show auth/tenant checks, validation, idempotency/rate-limit controls, or delegate to a protected application boundary."
+        );
+      }
+
+      if (/\b(subscription|Subscription|@Subscription|pubsub|publish|subscribe)\b/i.test(window)
+        && !/\b(auth|authorize|tenant|filter|withFilter|scope|permission|unsubscribe|backpressure|rateLimit)\b/i.test(window)
+        && !emitted.has("graphql-subscription-without-scope-or-backpressure")) {
+        emitted.add("graphql-subscription-without-scope-or-backpressure");
+        addFinding(
+          findings,
+          "graphql-subscription-without-scope-or-backpressure",
+          "medium",
+          repo.name,
+          file,
+          line,
+          window,
+          "Subscriptions and realtime streams need scoped filtering, auth, unsubscribe/backpressure behavior, and rate limits."
+        );
+      }
+
+      if (/\b(introspection|graphiql|playground|ApolloServer|GraphQLModule)\b/i.test(window)
+        && !/\b(production|prod|NODE_ENV|disabled|false|guard|auth)\b/i.test(window)
+        && !emitted.has("graphql-introspection-enabled-without-prod-guard")) {
+        emitted.add("graphql-introspection-enabled-without-prod-guard");
+        addFinding(
+          findings,
+          "graphql-introspection-enabled-without-prod-guard",
+          "low",
+          repo.name,
+          file,
+          line,
+          window,
+          "GraphQL introspection/playground should be disabled or explicitly guarded in production environments."
+        );
+      }
+
+      if (/\b(service\s+\w+|rpc\s+\w+|message\s+\w+)\b/.test(window)
+        && /\.proto$/i.test(file)
+        && !/\b(v\d+|reserved|deprecated|optional|oneof|package\s+[\w.]*v\d+)/i.test(window)
+        && !emitted.has("grpc-proto-without-compatibility-signal")) {
+        emitted.add("grpc-proto-without-compatibility-signal");
+        addFinding(
+          findings,
+          "grpc-proto-without-compatibility-signal",
+          "low",
+          repo.name,
+          file,
+          line,
+          window,
+          "gRPC/protobuf contracts should preserve backward compatibility through versioned packages, reserved fields, optional evolution, and deprecation policy."
+        );
+      }
+
+      if (/\b(socket\.on|io\.on|WebSocket|ws\.on|send|emit|broadcast|subscribe)\b/i.test(window)
+        && !/\b(auth|authorize|token|tenant|room|channel|validate|schema|rateLimit|throttle|backpressure|heartbeat|close)\b/i.test(window)
+        && !emitted.has("websocket-handler-without-auth-or-backpressure")) {
+        emitted.add("websocket-handler-without-auth-or-backpressure");
+        addFinding(
+          findings,
+          "websocket-handler-without-auth-or-backpressure",
+          "medium",
+          repo.name,
+          file,
+          line,
+          window,
+          "WebSocket/realtime handlers should validate message shape, authorize channel/tenant scope, and define rate-limit/backpressure/heartbeat behavior."
+        );
+      }
+    });
+  }
+
+  return findings;
+}
+
 function scanUiSemanticsAndA11y(repo) {
   const findings = [];
   const uiFilePattern = /\.(tsx|jsx|vue|svelte|astro|html)$/i;
@@ -1519,6 +1767,7 @@ function scanUiSemanticsAndA11y(repo) {
     if (changedLineCount(repo, file) === 0) continue;
     const text = readFile(repo.root, file);
     const lines = text.split(/\r?\n/);
+    const emitted = new Set();
 
     lines.forEach((lineText, index) => {
       const line = index + 1;
@@ -1558,6 +1807,97 @@ function scanUiSemanticsAndA11y(repo) {
         "-",
         `${divTags} div elements and no semantic landmarks detected`,
         "Page/layout components should prefer semantic landmarks such as header, nav, main, section, article, aside, or footer where appropriate."
+      );
+    }
+  }
+
+  return findings;
+}
+
+function scanAdvancedA11y(repo) {
+  const findings = [];
+  const uiFilePattern = /\.(tsx|jsx|vue|svelte|astro|html|css|scss)$/i;
+
+  for (const file of existingFiles(repo.root, repo.entries).filter((value) => uiFilePattern.test(value) && !isTest(value))) {
+    if (changedLineCount(repo, file) === 0) continue;
+    const text = readFile(repo.root, file);
+    const lines = text.split(/\r?\n/);
+    const emitted = new Set();
+
+    lines.forEach((lineText, index) => {
+      const line = index + 1;
+      const window = lines.slice(Math.max(0, index - 4), Math.min(lines.length, index + 8)).join("\n");
+      if (!windowTouchesChangedLine(repo, file, Math.max(1, line - 4), window.split(/\r?\n/).length)) return;
+
+      if (/\b(tabIndex|tabindex)=["'{]?[1-9]/.test(lineText)) {
+        addFinding(
+          findings,
+          "positive-tabindex-a11y-risk",
+          "medium",
+          repo.name,
+          file,
+          line,
+          lineText,
+          "Avoid positive tabindex. Preserve natural focus order or manage focus with accessible, documented keyboard behavior."
+        );
+      }
+
+      if (/\brole=["'](button|link|navigation|main|img|checkbox|dialog)["']/.test(lineText)
+        && /<(button|a|nav|main|img|input|dialog)\b/i.test(lineText)) {
+        addFinding(
+          findings,
+          "redundant-or-conflicting-aria-role",
+          "low",
+          repo.name,
+          file,
+          line,
+          lineText,
+          "Avoid ARIA roles that duplicate or conflict with native semantics. Prefer semantic HTML first and ARIA only when it changes the accessibility tree correctly."
+        );
+      }
+
+      if (/\baria-(label|labelledby|describedby)=["']\s*["']/.test(lineText)
+        || /\baria-hidden=["']true["']/.test(lineText) && /\b(onClick|href|tabIndex|role=)/.test(window)) {
+        addFinding(
+          findings,
+          "aria-misuse-a11y-risk",
+          "medium",
+          repo.name,
+          file,
+          line,
+          window,
+          "ARIA attributes should not hide focusable/interactive content or provide empty labels. Validate with role queries and axe."
+        );
+      }
+
+      if (/\b(outline\s*:\s*none|focus:outline-none|focus-visible:outline-none)\b/i.test(lineText)
+        && !/\b(focus-visible|ring-|box-shadow|outline-offset|:focus-visible)\b/i.test(window.replace(lineText, ""))) {
+        addFinding(
+          findings,
+          "focus-visible-style-missing",
+          "medium",
+          repo.name,
+          file,
+          line,
+          window,
+          "Keyboard focus must remain visible. If outline is removed, add a replacement focus-visible/ring/box-shadow style."
+        );
+      }
+    });
+
+    if (/(layout|shell|app|root|navigation|nav)/i.test(file)
+      && /<nav\b/i.test(text)
+      && /<main\b/i.test(text)
+      && !/\b(skip[- ]?link|href=["']#(?:main|content)|Pular para|Skip to)\b/i.test(text)) {
+      addFinding(
+        findings,
+        "missing-skip-link-for-repeated-navigation",
+        "low",
+        repo.name,
+        file,
+        "-",
+        "Layout has navigation and main landmarks but no skip-link signal.",
+        "Add a keyboard-visible skip link to let users bypass repeated navigation."
       );
     }
   }
@@ -1730,6 +2070,79 @@ function scanBundleSplitRisks(repo) {
         "Investigate whether this heavy route/shell import belongs behind route-level code-splitting, lazy/Suspense, dynamic import, or manual chunking. Treat as blocking only when it affects the startup path or explains a measured/build bundle regression."
       );
     });
+  }
+
+  return findings;
+}
+
+function scanUiPerformanceRisks(repo) {
+  const findings = [];
+  const uiFilePattern = /\.(tsx|jsx|vue|svelte|astro)$/i;
+  const bundleBudgetPattern = /(webpack|vite|rollup|next|nuxt|rspack|rsbuild|package)\.(config\.)?[cm]?[jt]s$|package\.json$/i;
+
+  for (const file of existingFiles(repo.root, repo.entries).filter((value) => uiFilePattern.test(value) && !isTest(value))) {
+    if (changedLineCount(repo, file) === 0) continue;
+    const text = readFile(repo.root, file);
+    const lines = text.split(/\r?\n/);
+    const emitted = new Set();
+
+    lines.forEach((lineText, index) => {
+      const line = index + 1;
+      const window = lines.slice(Math.max(0, index - 5), Math.min(lines.length, index + 12)).join("\n");
+      if (!windowTouchesChangedLine(repo, file, Math.max(1, line - 5), window.split(/\r?\n/).length)) return;
+
+      if (/\b(onChange|onInput|watch\s*\(|useEffect\s*\(|useWatch|v-model|@input)\b/i.test(window)
+        && /\b(fetch|axios|request|mutate|refetch|invalidateQueries|search|query)\b/i.test(window)
+        && !/\b(debounce|throttle|useDeferredValue|startTransition|AbortController|cancel|staleTime|minLength|enabled\s*:)/i.test(window)
+        && !emitted.has("ui-network-on-input-without-debounce")) {
+        emitted.add("ui-network-on-input-without-debounce");
+        addFinding(
+          findings,
+          "ui-network-on-input-without-debounce",
+          "medium",
+          repo.name,
+          file,
+          line,
+          window,
+          "Network work triggered by typing/input should have debounce/throttle, cancellation, min-length gating, or transition/deferred behavior."
+        );
+      }
+
+      if (/\b(for\s*\(|while\s*\(|JSON\.parse|JSON\.stringify|localStorage\.|sessionStorage\.)/.test(window)
+        && /\b(return\s*<|template|render\s*\(|computed\s*\(|useMemo\s*\()/i.test(text)
+        && !/\b(useMemo|memo|computed|worker|requestIdleCallback|virtual|windowing|paginate|slice\s*\()/i.test(window)
+        && !emitted.has("ui-render-blocking-work-signal")) {
+        emitted.add("ui-render-blocking-work-signal");
+        addFinding(
+          findings,
+          "ui-render-blocking-work-signal",
+          "low",
+          repo.name,
+          file,
+          line,
+          window,
+          "Check whether heavy loops, JSON work, or storage access runs during render. Move blocking work to memoized selectors, workers, pagination, or async boundaries when measurable."
+        );
+      }
+    });
+  }
+
+  for (const file of existingFiles(repo.root, repo.entries).filter((value) => bundleBudgetPattern.test(value))) {
+    if (changedLineCount(repo, file) === 0) continue;
+    const text = readFile(repo.root, file);
+    if (/\b(monaco-editor|pdfjs|xlsx|exceljs|three|mapbox-gl|echarts|chart\.js|firebase|aws-sdk|@tiptap|ckeditor|mermaid)\b/i.test(text)
+      && !/\b(budget|bundle|size-limit|bundlesize|performanceBudget|manualChunks|splitChunks|dynamic\s+import|lazy\s*\()/i.test(text)) {
+      addFinding(
+        findings,
+        "heavy-dependency-without-bundle-budget",
+        "low",
+        repo.name,
+        file,
+        "-",
+        "Heavy frontend dependency appears in changed manifest/config without a bundle-budget signal.",
+        "For startup-path dependencies, add a bundle-size check, manual chunk/lazy boundary, or measured rationale."
+      );
+    }
   }
 
   return findings;
@@ -2028,6 +2441,14 @@ function reviewQuestionsForRepo(repo, findings) {
     questions.push("A API alterada segue o contrato público esperado para recursos REST, versionamento, paginação/filtros, status codes e compatibilidade OpenAPI/cliente?");
   }
 
+  if (rules.has("graphql-resolver-n-plus-one-or-unbounded-risk") || rules.has("graphql-mutation-without-boundary-controls") || rules.has("graphql-subscription-without-scope-or-backpressure") || rules.has("grpc-proto-without-compatibility-signal") || rules.has("websocket-handler-without-auth-or-backpressure")) {
+    questions.push("A API não-REST alterada tem contrato/versionamento, limites de complexidade/paginação, auth/tenant scope, compatibilidade e teste de carga/realtime quando aplicável?");
+  }
+
+  if (rules.has("external-call-without-timeout-or-resilience") || rules.has("critical-boundary-without-instrumentation-signal") || rules.has("unstructured-error-log-without-correlation") || rules.has("security-event-without-observability-signal")) {
+    questions.push("O fluxo alterado precisa de observabilidade operacional nesta entrega: logs estruturados, correlation/trace IDs, métricas, auditoria ou circuit breaker?");
+  }
+
   if (rules.has("domain-layer-imports-outer-layer") || rules.has("presentation-imports-data-layer") || rules.has("missing-port-interface-boundary") || rules.has("ui-mixes-presentation-and-data-access")) {
     questions.push("A separação entre apresentação, aplicação/domínio e dados faz parte do escopo desta entrega, ou há uma restrição explícita para aceitar acoplamento temporário?");
   }
@@ -2036,16 +2457,28 @@ function reviewQuestionsForRepo(repo, findings) {
     questions.push("A tela/componente alterado precisa cumprir semântica HTML e acessibilidade como critério bloqueante nesta PR, incluindo landmarks, labels, navegação por teclado e distinção button/link?");
   }
 
-  const catalogQuestions = domainQuestions(repo.config.domainCatalogs || [], domains, files);
+  if (rules.has("positive-tabindex-a11y-risk") || rules.has("redundant-or-conflicting-aria-role") || rules.has("aria-misuse-a11y-risk") || rules.has("focus-visible-style-missing") || rules.has("missing-skip-link-for-repeated-navigation")) {
+    questions.push("A mudança de UI exige conformidade WCAG/foco/ARIA nesta PR, ou a revisão deve registrar ajustes de acessibilidade avançada como follow-up explícito?");
+  }
+
+  if (rules.has("ui-network-on-input-without-debounce") || rules.has("ui-render-blocking-work-signal") || rules.has("heavy-dependency-without-bundle-budget")) {
+    questions.push("Há orçamento de performance/bundle ou meta de resposta da UI que torne bloqueante debounce, lazy loading, render streaming, worker ou análise de bundle?");
+  }
+
+  const catalogQuestions = domainQuestions(repo.config.domainCatalogs || [], domains, files, repo.config.customDomainQuestions || {});
   return [...new Set([...questions, ...catalogQuestions, ...(repo.config.customQuestions || [])])];
 }
 
-function domainQuestions(catalogs, domains, files) {
+function domainQuestions(catalogs, domains, files, customDomainQuestions = {}) {
   const requested = new Set(catalogs.map((catalog) => String(catalog).toLowerCase()));
   const text = files.join("\n");
   if (/\b(cpf|cnpj|lgpd|privacy|consent|personalData|pii)\b/i.test(text)) requested.add("lgpd");
   if (domains.has("financial")) requested.add("finance");
   if (domains.has("health")) requested.add("health");
+  if (/\b(cart|checkout|payment|coupon|sku|inventory|order|shipment|refund)\b/i.test(text)) requested.add("ecommerce");
+  if (/\b(student|course|lesson|enrollment|classroom|grade|lms|school)\b/i.test(text)) requested.add("education");
+  if (/\b(profile|follower|feed|post|comment|like|block|report|moderation)\b/i.test(text)) requested.add("social");
+  if (/\b(device|sensor|firmware|mqtt|telemetry|gateway|edge|iot)\b/i.test(text)) requested.add("iot");
   const questions = [];
   if (requested.has("lgpd") || requested.has("privacy")) {
     questions.push("LGPD/privacy: a mudança minimiza dados pessoais, preserva consentimento/base legal, redige logs e mantém retenção/anonimização compatíveis?");
@@ -2055,6 +2488,22 @@ function domainQuestions(catalogs, domains, files) {
   }
   if (requested.has("health")) {
     questions.push("Saúde: a mudança limita exposição de dados clínicos, mantém consentimento/acesso mínimo e registra auditoria de acesso sensível?");
+  }
+  if (requested.has("ecommerce")) {
+    questions.push("E-commerce/PCI: checkout, pagamentos, cupons, estoque e reembolso preservam idempotência, auditoria, antifraude e evitam exposição de dados de cartão?");
+  }
+  if (requested.has("education")) {
+    questions.push("Educação: matrícula, progresso, certificados, notas e dados de menores respeitam autorização, privacidade, auditoria e consistência entre aluno/turma/curso?");
+  }
+  if (requested.has("social")) {
+    questions.push("Social media/COPPA: perfis, feed, bloqueio, denúncia, moderação e conteúdo de menores mantêm controles de privacidade, abuso e visibilidade?");
+  }
+  if (requested.has("iot")) {
+    questions.push("IoT: comandos de dispositivo, firmware, telemetria e credenciais usam autorização forte, replay protection, rate limits e observabilidade de falhas?");
+  }
+  for (const [domain, domainQuestions] of Object.entries(customDomainQuestions || {})) {
+    if (!requested.has(String(domain).toLowerCase())) continue;
+    if (Array.isArray(domainQuestions)) questions.push(...domainQuestions.map(String));
   }
   return questions;
 }
@@ -2090,6 +2539,14 @@ function runtimeVerificationRequirementsForRepo(repo, findings, repositoryCount)
     requirements.push("For REST/API design signals, exercise the real route/controller/handler contract, including status code, method semantics, pagination/filter behavior, and OpenAPI/client compatibility when public.");
   }
 
+  if (rules.has("graphql-resolver-n-plus-one-or-unbounded-risk") || rules.has("graphql-mutation-without-boundary-controls") || rules.has("graphql-subscription-without-scope-or-backpressure") || rules.has("graphql-introspection-enabled-without-prod-guard")) {
+    requirements.push("For GraphQL signals, exercise the real resolver/schema path and prove auth, pagination/complexity limits, DataLoader/batching, subscription scope/backpressure, and production introspection behavior when applicable.");
+  }
+
+  if (rules.has("grpc-proto-without-compatibility-signal") || rules.has("websocket-handler-without-auth-or-backpressure")) {
+    requirements.push("For gRPC/WebSocket/realtime signals, run producer/consumer or protocol-level smoke tests that prove compatibility, authorization, validation, and disconnect/backpressure behavior.");
+  }
+
   if (repositoryCount > 1 || contractFiles.length > 0) {
     requirements.push("For cross-repo or contract/schema/API/client changes, run producer and consumer compatibility checks or contract tests across every touched repository.");
   }
@@ -2100,6 +2557,14 @@ function runtimeVerificationRequirementsForRepo(repo, findings, repositoryCount)
 
   if (rules.has("ui-page-without-semantic-landmarks") || rules.has("ui-image-missing-alt") || rules.has("ui-input-without-label-signal") || rules.has("ui-clickable-div-without-keyboard-semantics") || rules.has("ui-anchor-used-as-button") || rules.has("ui-button-used-as-link")) {
     requirements.push("For UI semantics/accessibility signals, validate the rendered component/page with browser-use plus a semantic/a11y check such as axe, eslint-plugin-jsx-a11y, Testing Library role queries, or equivalent framework-native assertions.");
+  }
+
+  if (rules.has("positive-tabindex-a11y-risk") || rules.has("redundant-or-conflicting-aria-role") || rules.has("aria-misuse-a11y-risk") || rules.has("focus-visible-style-missing") || rules.has("missing-skip-link-for-repeated-navigation")) {
+    requirements.push("For advanced accessibility signals, prove keyboard focus order, visible focus, skip-link behavior, ARIA role correctness, and WCAG contrast/focus checks through rendered UI tooling such as axe-core or equivalent.");
+  }
+
+  if (rules.has("ui-network-on-input-without-debounce") || rules.has("ui-render-blocking-work-signal") || rules.has("heavy-dependency-without-bundle-budget")) {
+    requirements.push("For UI performance/bundle signals, measure or test the changed path with debounce/cancellation behavior, render responsiveness, lazy/code-split boundary, or bundle-size budget evidence.");
   }
 
   if (rules.has("domain-layer-imports-outer-layer") || rules.has("presentation-imports-data-layer") || rules.has("missing-port-interface-boundary") || rules.has("ui-mixes-presentation-and-data-access")) {
@@ -2139,6 +2604,10 @@ function runtimeVerificationRequirementsForRepo(repo, findings, repositoryCount)
 
   if (rules.has("retry-without-backoff-or-timeout")) {
     requirements.push("For retry/backoff signals, prove bounded attempts, timeout, jitter/backoff behavior, or circuit-breaker handling with a focused failure-path test/probe.");
+  }
+
+  if (rules.has("external-call-without-timeout-or-resilience") || rules.has("critical-boundary-without-instrumentation-signal") || rules.has("unstructured-error-log-without-correlation") || rules.has("security-event-without-observability-signal")) {
+    requirements.push("For observability/resilience signals, run failure-path or boundary tests/probes that prove timeout/circuit-breaker behavior and safe structured logs/metrics/traces/audit events on critical errors.");
   }
 
   if (rules.has("shared-state-without-lock-signal")) {
@@ -2498,12 +2967,16 @@ for (const repo of repos) {
     ...scanRawSqlSecurity(repo),
     ...scanWebAndRuntimeSecurity(repo),
     ...scanUnboundedDataAccess(repo),
+    ...scanObservabilityAndResilience(repo),
     ...scanFrameworkSpecific(repo),
     ...scanRestApiDesign(repo),
+    ...scanGraphqlGrpcRealtimeDesign(repo),
     ...scanUiSemanticsAndA11y(repo),
+    ...scanAdvancedA11y(repo),
     ...scanPublicContractIntegrity(repo),
     ...scanConfigValidationIntegrity(repo),
     ...scanBundleSplitRisks(repo),
+    ...scanUiPerformanceRisks(repo),
     ...scanCouplingAndComplexity(repo),
     ...scanArchitectureBoundaries(repo),
     ...scanTests(repo),

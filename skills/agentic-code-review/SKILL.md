@@ -102,12 +102,15 @@ Prioritize:
 - unsafe HTML rendering, command execution with dynamic input, path traversal, sensitive-data logging, and other web/runtime security sinks;
 - OWASP-style boundary risks: weak crypto, insecure HTTP, permissive CORS, unsafe cookies, SSRF, open redirects, upload validation gaps, webhook signature gaps, and auth endpoints without rate-limit signals;
 - REST/API design risks: verb-oriented paths, mutating GET semantics, ambiguous mutation status codes, collection routes without pagination/filter/sort contracts, public APIs without a visible versioning strategy, and missing OpenAPI/consumer compatibility evidence;
+- GraphQL/gRPC/WebSocket risks: resolver N+1 and unbounded reads, mutations without boundary controls, subscriptions/realtime streams without scope/backpressure, production introspection, protobuf compatibility/versioning gaps, and realtime handlers without auth/validation/rate limits;
 - UI semantics/accessibility risks: missing landmarks, image alternatives, labels, keyboard semantics, and button/link distinction; rendered UI should be validated with browser-use plus axe, Testing Library role queries, jsx-a11y, or equivalent tooling when relevant;
+- advanced accessibility risks: positive tabindex, incorrect ARIA, hidden interactive content, missing focus-visible styling, missing skip links, contrast/focus regressions, and WCAG evidence gaps;
 - N+1 query patterns and per-item async calls that break at scale;
 - unbounded list/query access without an obvious limit, pagination, cursor, or batch boundary;
 - public/API response integrity: never expose raw domain, persistence, legacy, private, or internal state directly; public compatibility aliases must be sanitized subsets, while full contracts should live behind explicit public DTOs/resources;
 - weak boundary validation for public configuration, visual tokens, enums, modes, statuses, roles, provider names, URLs, radii, gradients, and other runtime-controlling strings;
 - error handling, swallowed exceptions, null fallbacks that mask UI error states, non-actionable messages, retries, timeouts, and rollback behavior;
+- observability and resilience: structured logs, correlation IDs, redaction, security/audit events, OpenTelemetry/metrics, external-call timeouts, retry/backoff, circuit breakers, and idempotent retry state;
 - architecture boundaries, responsibility size, hidden coupling, duplicated helper conventions, and circular dependencies;
 - framework-aware boundary fit: Django/Express/Rails route conventions, React/Vue/Svelte template semantics, Tailwind/BEM styling conventions, and separation between presentation, application/domain logic, and data/persistence;
 - patch semantics for optional nested data, especially no-change sentinels, null/undefined deletion semantics, and reset behavior;
@@ -115,6 +118,7 @@ Prioritize:
 - single responsibility violations, large files that keep accumulating reasons to change, long functions, deep nesting, unnecessary `else` branches, and Object Calisthenics signals when they affect maintainability or risk;
 - magic strings, magic numbers, boolean mode flags, duplicated literals, unsafe casts, and weak naming;
 - performance risks, cache invalidation, unbounded loops, expensive repeated work, and bundle-size regressions with an identified cause;
+- UI performance risks such as network-on-input without debounce/cancellation, blocking render work, missing lazy/code-split boundaries, and missing bundle-size budgets for heavy dependencies;
 - code-splitting opportunities only when there is concrete evidence: a build warning, measured initial-load regression, or static import of a heavy feature/library in the initial shell. Treat generic "chunk > 500 kB" warnings as non-blocking unless the diff introduced an obvious heavy dependency on the startup path;
 - missing or weak regression coverage for the behavior changed;
 - weak testability, static-only validation, copied probes, broad tests that do not exercise the touched path, and refactors without behavioral proof;
@@ -132,7 +136,11 @@ It checks for signals, not final proof:
 - unbounded list/query access that lacks an obvious limit, pagination, cursor, or batch boundary;
 - public/API contract mappers that expose raw/internal/legacy/domain fields without a sanitizer, redaction, DTO/resource adapter, allowlist, or public type;
 - REST/API route design signals for nouns/resources, method semantics, status codes, pagination/filter contracts, and versioning;
+- GraphQL, gRPC/protobuf, and WebSocket/realtime contract signals for auth, pagination/complexity, compatibility, schema evolution, scope, and backpressure;
 - UI semantic/a11y signals for landmarks, image alt text, input labels, keyboard-reachable controls, and correct action/navigation elements;
+- advanced a11y signals for ARIA misuse, focus-visible gaps, positive tabindex, and missing skip links;
+- observability/resilience signals for logs without correlation/redaction, security events without audit/metrics, external calls without timeout/retry/circuit breaker, and critical boundaries without instrumentation;
+- UI performance and bundle signals for network-on-input, render-blocking work, lazy/code-splitting opportunities, and heavy dependencies without bundle-budget evidence;
 - architecture/layering signals for domain imports from outer layers, presentation importing persistence/data directly, missing port/interface boundaries, and UI rendering mixed with direct data access;
 - public response/resource/DTO types that reuse broad internal/domain/persistence types instead of sanitized public types;
 - string-only validation for configurable public fields, visual tokens, enums, statuses, roles, provider names, URLs, modes, or other runtime-controlling values;
@@ -176,6 +184,9 @@ Optional external toolbelt:
 - `jscpd` for copy-paste duplication;
 - `lizard` for complexity;
 - `dependency-cruiser` or `madge` for JS/TS dependency cycles;
+- `graphql-inspector` for opt-in GraphQL schema compatibility;
+- `buf` for protobuf/gRPC lint and breaking-change checks;
+- `jdeps` and `clang-callgraph` for Java/C/C++ dependency or call-graph inspection;
 - `osv-scanner` for dependency vulnerabilities when manifests/lockfiles change.
 - `grype` for container/filesystem dependency vulnerabilities;
 - `trufflehog` and `git-secrets` as additional secret scanners;
@@ -186,6 +197,7 @@ Optional external toolbelt:
 - C/C++: `cppcheck` and `clang-tidy`;
 - PHP: `phpstan` and `psalm`;
 - UI accessibility: `eslint-jsx-a11y` and opt-in `axe`;
+- bundle/performance: opt-in `size-limit` and `webpack-bundle-analyzer`;
 - Docker/IaC: `trivy`, `checkov`, and `regula`;
 - performance and DAST tools are opt-in only: `autocannon`, `wrk`, and OWASP `zap-baseline`, requiring `performanceTargets` or `dastTargets` in config and explicit `--external-tool`.
 
@@ -195,7 +207,9 @@ Project config:
 - Use `.agentic-reviewrc.json` to disable noisy rules, override severity, tune thresholds, ignore generated paths, add business-specific questions, and set external tool timeouts.
 - Use `appType` for adaptive thresholds: `public-api` and `microservice` are stricter on file/function size and coupling; `monolith` allows larger files while still flagging broad responsibility growth.
 - Use `domainCatalogs` for built-in LGPD/privacy, finance, and health review questions.
+- Domain catalogs also include e-commerce, education, social media, and IoT. Use `customDomainQuestions` to add project-specific catalogs without changing the skill.
 - Use `dastTargets`, `performanceTargets`, and `a11yTargets` only for explicit staging/load-test/accessibility workflows; they are not run by default unless their named external tool is selected.
+- Use `graphqlBaseSchema`, `graphqlHeadSchema`, and `bundleStatsPath` only with explicit selected external tools such as `graphql-inspector` and `webpack-bundle-analyzer`.
 - Prefer config tuning over weakening generic rules when one repository has special conventions.
 - Keep config small and explicit; do not use it to hide real risk.
 
@@ -214,7 +228,7 @@ After editing this skill or its scripts, run:
 node ~/.agents/skills/agentic-code-review/scripts/smoke-review-toolbelt.mjs
 ```
 
-The smoke creates temporary repositories and verifies core gates: SQL injection, N+1, unbounded list queries, REST/API design, UI semantics/accessibility, architecture boundaries, local artifacts, control blocks not being treated as functions, production/test literal classification, mock-only tests, stale test mocks, narrating comments, happy-path-only tests, local literal paths, backend boundary integration/e2e coverage, and cross-repo contract checks.
+The smoke creates temporary repositories and verifies core gates: SQL injection, N+1, unbounded list queries, REST/API design, GraphQL/gRPC/WebSocket boundaries, observability/resilience, UI semantics/accessibility, advanced a11y, UI performance/bundle signals, architecture boundaries, local artifacts, control blocks not being treated as functions, production/test literal classification, mock-only tests, stale test mocks, narrating comments, happy-path-only tests, local literal paths, backend boundary integration/e2e coverage, and cross-repo contract checks.
 
 ## High-Testability Runtime Gate
 
@@ -269,6 +283,7 @@ Ask for user input when a checkpoint depends on:
 - whether backend changes require e2e/integration coverage beyond focused unit tests;
 - whether a cross-repo contract has external consumers, compatibility constraints, or a migration window;
 - whether API design, OpenAPI compatibility, UI semantics/accessibility, or architecture layering must block this PR or become explicit follow-up;
+- whether GraphQL/gRPC/WebSocket compatibility, observability/resilience, advanced accessibility, or UI performance budgets must block this PR or become explicit follow-up;
 - whether a generated file, local artifact, or broad diff is intentionally versioned.
 
 If `request_user_input` is available in the current mode, use it for 1-3 short, mutually exclusive questions. In Default mode, ask concise plain-text questions and pause only when the answer materially changes the verdict. Until answered, place the item in `Escopo não revisado` or `Pontos de atenção adicionais`, not as a forced blocking finding.

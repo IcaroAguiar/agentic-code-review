@@ -28,6 +28,14 @@ export function findingCategory(finding, isTestFile) {
     "ui-page-without-semantic-landmarks",
     "ui-button-used-as-link",
     "missing-port-interface-boundary",
+    "graphql-introspection-enabled-without-prod-guard",
+    "grpc-proto-without-compatibility-signal",
+    "critical-boundary-without-instrumentation-signal",
+    "external-call-without-timeout-or-resilience",
+    "redundant-or-conflicting-aria-role",
+    "missing-skip-link-for-repeated-navigation",
+    "ui-render-blocking-work-signal",
+    "heavy-dependency-without-bundle-budget",
   ].includes(finding.rule)) {
     return "review-signal";
   }

@@ -30,8 +30,14 @@
   ],
   "domainCatalogs": [
     "lgpd",
-    "finance"
+    "finance",
+    "education"
   ],
+  "customDomainQuestions": {
+    "marketplace": [
+      "Marketplace: split de pagamento, disputa, comissao e repasse preservam auditoria, idempotencia e reconciliacao?"
+    ]
+  },
   "dastTargets": [
     "https://staging.example.com"
   ],
@@ -41,5 +47,8 @@
   "a11yTargets": [
     "https://staging.example.com/dashboard"
   ],
+  "graphqlBaseSchema": "schema.graphql",
+  "graphqlHeadSchema": "schema.graphql",
+  "bundleStatsPath": "dist/stats.json",
   "externalToolTimeoutMs": 60000
 }

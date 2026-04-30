@@ -27,9 +27,16 @@
       "type": "array",
       "items": { "type": "string" }
     },
+    "customDomainQuestions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
     "domainCatalogs": {
       "type": "array",
-      "items": { "enum": ["lgpd", "privacy", "finance", "financial", "health"] }
+      "items": { "enum": ["lgpd", "privacy", "finance", "financial", "health", "ecommerce", "education", "social", "iot"] }
     },
     "dastTargets": {
       "type": "array",
@@ -42,6 +49,15 @@
     "a11yTargets": {
       "type": "array",
       "items": { "type": "string" }
+    },
+    "graphqlBaseSchema": {
+      "type": "string"
+    },
+    "graphqlHeadSchema": {
+      "type": "string"
+    },
+    "bundleStatsPath": {
+      "type": "string"
     },
     "externalToolTimeoutMs": {
       "type": "number",
