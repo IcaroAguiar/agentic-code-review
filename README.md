@@ -26,6 +26,7 @@ agentic-code-review/
         agentic-reviewrc.schema.json
         github-action-agentic-code-review.yml
         deep-review-toolbelt-2026.json
+        reviewer-feedback.example.json
         calibration-2026-04-28.md
         contract-compatibility-test.vitest.ts
         security-boundary-test.vitest.ts
@@ -155,6 +156,7 @@ npx agentic-code-review collect --base origin/main
 npx agentic-code-review collect --base origin/main --json
 npx agentic-code-review collect --root ../api --root ../web
 npx agentic-code-review collect --base <base-sha> --head <head-sha>
+npx agentic-code-review collect --full-repo --json
 ```
 
 This command prints a review packet with:
@@ -174,6 +176,7 @@ Important options:
 
 - `--json`: emits a structured packet for CI, dashboards, or calibration.
 - `--config <file>`: uses an explicit config file instead of auto-discovering `.agentic-reviewrc.json`.
+- `--full-repo` / `--all-files` / `--scope full`: scans every tracked file in the repository instead of only changed lines. Use this for already-merged code, production snapshots, main/develop audits, and historical regression hunts.
 - `--run-external-tools`: runs installed optional scanners.
 - `--allow-tool-downloads`: permits `npx` or `uvx` fallback tools. This is opt-in.
 - `--external-tool <name>`: limits optional scanning to one or more named tools.
@@ -198,6 +201,8 @@ Supported fields:
 - `a11yTargets`: rendered UI URLs for explicit axe accessibility scans.
 - `graphqlBaseSchema` / `graphqlHeadSchema`: schema paths for explicit GraphQL Inspector compatibility checks.
 - `bundleStatsPath`: stats file path for explicit bundle analysis.
+- `coverageLinesMin`: minimum coverage percentage used when a coverage summary exists.
+- `reviewFeedbackPath`: conventional path for reviewer feedback records used during calibration.
 - `externalToolTimeoutMs`: set the default optional tool timeout for that repository.
 
 ### `agentic-code-review calibrate`
@@ -207,9 +212,10 @@ Runs the collector against historical commit ranges and produces a report for co
 ```bash
 npx agentic-code-review calibrate --repo . --case pr-101:<base-sha>:<head-sha>
 npx agentic-code-review calibrate --repo . --cases-file calibration-cases.json --json
+npx agentic-code-review calibrate --repo . --cases-file calibration-cases.json --feedback-file reviewer-feedback.json --json
 ```
 
-Use calibration to tune false positives, false negatives, and severity mismatches before changing generic rules.
+Use calibration to tune false positives, false negatives, and severity mismatches before changing generic rules. Use `skills/agentic-code-review/templates/reviewer-feedback.example.json` as the feedback shape for human reviewer outcomes.
 
 ### `agentic-code-review smoke`
 
@@ -219,7 +225,7 @@ Runs the fixture smoke suite for the skill and scripts:
 npx agentic-code-review smoke
 ```
 
-The smoke suite creates temporary Git repositories under `/private/tmp/agentic-code-review-smoke` and verifies scanner behavior for core cases such as SQL injection, N+1, unbounded list queries, REST/API design, NestJS framework boundaries, GraphQL/gRPC/WebSocket boundaries, observability/resilience, UI semantics/accessibility, UI performance, architecture boundaries, patch semantics, public contract leaks, UI token validation, large-file signals, cross-repo contracts, historical `--base/--head` ranges, and optional tool selection.
+The smoke suite creates temporary Git repositories under `/private/tmp/agentic-code-review-smoke` and verifies scanner behavior for core cases such as SQL injection, N+1, unbounded list queries, REST/API design, NestJS framework boundaries, GraphQL/gRPC/WebSocket boundaries, events/serverless, observability/resilience, UI semantics/accessibility, UI performance, call-graph/data-flow, architecture boundaries, docs/coverage, patch semantics, public contract leaks, UI token validation, full-repo snapshot scans, large-file signals, cross-repo contracts, historical `--base/--head` ranges, calibration feedback, and optional tool selection.
 
 It also validates JSON output, project config behavior, domain catalogs, and generic web/runtime/OWASP security signals such as unsafe HTML sinks, command injection, path traversal, weak crypto, permissive CORS, unsafe cookies, SSRF, open redirects, uploads, webhook signatures, retry/backoff gaps, and sensitive-data logging.
 
@@ -305,13 +311,16 @@ The collector currently checks for:
 - external side effects inside transactions;
 - public/API response mappers that expose raw, internal, legacy, or domain state without sanitization;
 - REST/API route design signals: verb-oriented paths, unsafe GET mutation signals, mutation status-code ambiguity, collection routes without pagination/filter contracts, and public routes without visible versioning strategy;
+- controller/resolver-to-contract coherence signals for OpenAPI/GraphQL SDL/protobuf, query complexity/depth limits, and gRPC breaking-change checks;
 - GraphQL/gRPC/WebSocket signals: resolver N+1 or unbounded reads, mutations without boundary controls, subscriptions without scope/backpressure, production introspection signals, protobuf compatibility/versioning gaps, and realtime handlers without auth/backpressure;
+- event/serverless signals: consumers without idempotency/deduplication, workers without bounded retry/backoff/concurrency, and functions without explicit timeout/memory/runtime limits;
 - UI semantic and accessibility signals: missing image alternatives, unlabeled inputs, clickable divs without keyboard semantics, link/button semantic drift, and page/layout files with many divs but no landmarks;
 - advanced accessibility signals: positive tabindex, ARIA misuse, missing focus-visible replacement, and missing skip links for repeated navigation;
 - observability/resilience signals: unstructured error logs without correlation IDs, security events without audit/metrics, external calls without timeout/retry/circuit-breaker policy, and critical boundaries without instrumentation signals;
 - UI performance signals: network-on-input without debounce/cancellation, blocking render work, and heavy dependencies without bundle-budget evidence;
-- architecture boundary signals: domain imports from outer/framework layers, presentation importing data/persistence directly, missing port/interface boundaries, and UI mixing rendering with direct data access;
+- architecture boundary and graph signals: domain imports from outer/framework layers, presentation importing data/persistence directly, missing port/interface boundaries, local dependency cycles, sensitive data crossing layers, route call paths that import query loops, and UI mixing rendering with direct data access;
 - framework-specific signals: NestJS controllers that access persistence directly, mutating Nest routes without visible guard/public intent, nested DTO validation without class-transformer `@Type`, Nest providers that bypass DI, Django/Flask/FastAPI route auth gaps, Spring controllers that access repositories directly, and Rails broad rescues without observability;
+- documentation and coverage signals from available coverage reports, README, and CONTRIBUTING when public/runtime surfaces need documented endpoints, versioning, environment variables, usage examples, and review/test policy;
 - public response types that reuse broad internal/domain/persistence types;
 - weak string-only validation for runtime-controlling config, visual tokens, statuses, roles, URLs, modes, and provider values;
 - asymmetric defaults or normalization for configurable runtime objects;

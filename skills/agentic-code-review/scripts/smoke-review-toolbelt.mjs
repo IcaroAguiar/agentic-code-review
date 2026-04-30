@@ -685,6 +685,41 @@ export function OrdersPage() {
     },
   },
   {
+    name: "call-graph-and-data-flow",
+    files: {
+      "src/controllers/accounts.controller.ts": `import { loadAccounts } from "../services/accounts.service";
+import { AccountRepository } from "../repositories/account.repository";
+
+export async function listAccounts(password: string, tenantId: string) {
+  return loadAccounts([tenantId], new AccountRepository());
+}
+`,
+      "src/services/accounts.service.ts": `import { helper } from "./cycle-a";
+
+export async function loadAccounts(ids: string[], repo: any) {
+  helper();
+  return ids.map((id) => repo.findUnique({ where: { id } }));
+}
+`,
+      "src/services/cycle-a.ts": `import { other } from "./cycle-b";
+export function helper() { return other(); }
+`,
+      "src/services/cycle-b.ts": `import { helper } from "./cycle-a";
+export function other() { return helper; }
+`,
+      "src/repositories/account.repository.ts": `export class AccountRepository {
+  findUnique(input: unknown) { return input; }
+}
+`,
+    },
+    assert(output) {
+      expectIncludes(this.name, output, "dependency-cycle-detected");
+      expectIncludes(this.name, output, "sensitive-data-crosses-layer-without-boundary");
+      expectIncludes(this.name, output, "n-plus-one-through-route-call-chain-signal");
+      expectIncludes(this.name, output, "For architecture/layering signals");
+    },
+  },
+  {
     name: "graphql-grpc-realtime",
     files: {
       "src/graphql/order.resolver.ts": `export const resolvers = {
@@ -732,6 +767,31 @@ message Order {
     },
   },
   {
+    name: "async-events-and-serverless",
+    files: {
+      "src/workers/payment.consumer.ts": `export async function processPaymentJob(job: { data: { orderId: string } }) {
+  await charge(job.data.orderId);
+}
+
+export const workerOptions = {
+  retry: true,
+};
+`,
+      "serverless.yml": `service: payments
+functions:
+  charge:
+    handler: src/workers/payment.consumer.processPaymentJob
+    runtime: nodejs20.x
+`,
+    },
+    assert(output) {
+      expectIncludes(this.name, output, "event-consumer-without-idempotency-signal");
+      expectIncludes(this.name, output, "event-worker-without-backoff-or-concurrency-limit");
+      expectIncludes(this.name, output, "serverless-function-without-runtime-limits");
+      expectIncludes(this.name, output, "For event/serverless signals");
+    },
+  },
+  {
     name: "observability-resilience",
     files: {
       ".agentic-reviewrc.json": `{"appType":"microservice"}`,
@@ -759,6 +819,45 @@ message Order {
       expectIncludes(this.name, output, "unstructured-error-log-without-correlation");
       expectIncludes(this.name, output, "security-event-without-observability-signal");
       expectIncludes(this.name, output, "For observability/resilience signals");
+    },
+  },
+  {
+    name: "api-contract-docs-coverage",
+    files: {
+      ".agentic-reviewrc.json": `{"appType":"public-api","coverageLinesMin":90}`,
+      "README.md": `# Demo
+
+Run the app locally.
+`,
+      "CONTRIBUTING.md": `# Contributing
+
+Keep commits tidy.
+`,
+      "coverage/coverage-summary.json": `{"total":{"lines":{"pct":72},"statements":{"pct":72}}}`,
+      "src/controllers/public.controller.ts": `function Get(path: string) { return function noop() {}; }
+export class PublicController {
+  @Get("/users")
+  list() { return []; }
+}
+`,
+      "src/graphql/users.resolver.ts": `export class UsersResolver {
+  @Query()
+  users() { return []; }
+}
+`,
+      "proto/users.proto": `syntax = "proto3";
+service Users { rpc List (ListRequest) returns (ListResponse); }
+message ListRequest { string id = 1; }
+message ListResponse { string id = 1; }
+`,
+    },
+    assert(output) {
+      expectIncludes(this.name, output, "api-controller-without-openapi-contract-signal");
+      expectIncludes(this.name, output, "graphql-resolver-without-schema-or-complexity-signal");
+      expectIncludes(this.name, output, "protobuf-contract-without-breaking-check-signal");
+      expectIncludes(this.name, output, "coverage-report-below-threshold");
+      expectIncludes(this.name, output, "readme-missing-api-env-usage-signal");
+      expectIncludes(this.name, output, "contributing-missing-review-test-policy");
     },
   },
   {
@@ -922,6 +1021,23 @@ expectIncludes("historical-head-range", historicalOutput, "APPROVED");
 expectNotIncludes("historical-head-range", historicalOutput, "WORKTREE_ONLY");
 console.log("PASS historical-head-range");
 
+const fullRepo = createRepo("full-repo-snapshot", {
+  "README.md": `# Snapshot
+
+API runtime.
+`,
+  "src/status.ts": `export function status(input: string) {
+  if (input === "APPROVED") return "APPROVED";
+  return "PENDING";
+}
+`,
+});
+commitAll(fullRepo, "snapshot");
+const fullRepoOutput = collect(fullRepo, ["--full-repo"]);
+expectIncludes("full-repo-snapshot", fullRepoOutput, "Collector scope: full repository");
+expectIncludes("full-repo-snapshot", fullRepoOutput, "APPROVED");
+console.log("PASS full-repo-snapshot");
+
 const selectedToolOutput = collect(historicalRepo, ["--external-tool", "jscpd"]);
 expectIncludes("external-tool-selection", selectedToolOutput, "Selected tools: jscpd");
 expectIncludes("external-tool-selection", selectedToolOutput, "jscpd");
@@ -994,10 +1110,11 @@ expectIncludes("configured-rules", configuredOutput, "Educação:");
 expectIncludes("configured-rules", configuredOutput, "Custom education checkpoint?");
 console.log("PASS configured-rules");
 
-const calibrationOutput = run("node", [join(scriptDir, "calibrate-review-history.mjs"), "--repo", historicalRepo, "--case", `historical:${historicalBase}:${historicalHead}`, "--json"], historicalRepo);
+write(join(historicalRepo, "reviewer-feedback.json"), `{"feedback":[{"case":"historical","rule":"magic-string","outcome":"false-positive"}]}`);
+const calibrationOutput = run("node", [join(scriptDir, "calibrate-review-history.mjs"), "--repo", historicalRepo, "--case", `historical:${historicalBase}:${historicalHead}`, "--feedback-file", "reviewer-feedback.json", "--json"], historicalRepo);
 const calibrationPacket = JSON.parse(calibrationOutput);
-if (calibrationPacket.cases?.[0]?.status !== "ok") {
-  throw new Error("calibration-cli: expected ok calibration case");
+if (calibrationPacket.cases?.[0]?.status !== "ok" || calibrationPacket.feedbackSummary?.falsePositive !== 1) {
+  throw new Error("calibration-cli: expected ok calibration case and feedback summary");
 }
 console.log("PASS calibration-cli");
 
@@ -1022,6 +1139,10 @@ expectIncludes("owasp-expanded-docs", skillText, "domainCatalogs");
 expectIncludes("owasp-expanded-docs", skillText, "zap-baseline");
 expectIncludes("web-api-architecture-docs", skillText, "REST/API design risks");
 expectIncludes("web-api-architecture-docs", skillText, "GraphQL/gRPC/WebSocket risks");
+expectIncludes("web-api-architecture-docs", skillText, "--full-repo");
+expectIncludes("web-api-architecture-docs", skillText, "async event/serverless behavior");
+expectIncludes("web-api-architecture-docs", skillText, "repository graph signals");
+expectIncludes("web-api-architecture-docs", skillText, "--feedback-file");
 expectIncludes("web-api-architecture-docs", skillText, "observability and resilience");
 expectIncludes("web-api-architecture-docs", skillText, "advanced accessibility risks");
 expectIncludes("web-api-architecture-docs", skillText, "UI performance risks");

@@ -50,5 +50,7 @@
   "graphqlBaseSchema": "schema.graphql",
   "graphqlHeadSchema": "schema.graphql",
   "bundleStatsPath": "dist/stats.json",
+  "coverageLinesMin": 85,
+  "reviewFeedbackPath": "docs/ai/agentic-code-review-feedback.json",
   "externalToolTimeoutMs": 60000
 }

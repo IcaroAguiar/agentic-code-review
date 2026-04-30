@@ -12,7 +12,7 @@ function usage() {
 
 Usage:
   agentic-code-review calibrate --repo <path> --case <name>:<base>:<head> [--case ...] [--json] [--out <file>]
-  agentic-code-review calibrate --repo <path> --cases-file <json> [--json] [--out <file>]
+  agentic-code-review calibrate --repo <path> --cases-file <json> [--feedback-file <json>] [--json] [--out <file>]
 
 cases-file shape:
   [
@@ -25,6 +25,7 @@ function parseArgs(argv) {
   const cases = [];
   let repo = "";
   let casesFile = "";
+  let feedbackFile = "";
   let json = false;
   let out = "";
 
@@ -48,6 +49,11 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg.startsWith("--cases-file=")) {
       casesFile = resolve(arg.split("=").slice(1).join("="));
+    } else if (arg === "--feedback-file") {
+      feedbackFile = resolve(argv[index + 1] || "");
+      index += 1;
+    } else if (arg.startsWith("--feedback-file=")) {
+      feedbackFile = resolve(arg.split("=").slice(1).join("="));
     } else if (arg === "--json") {
       json = true;
     } else if (arg === "--out") {
@@ -58,7 +64,7 @@ function parseArgs(argv) {
     }
   }
 
-  return { repo, cases, casesFile, json, out };
+  return { repo, cases, casesFile, feedbackFile, json, out };
 }
 
 function run(command, args, cwd) {
@@ -124,6 +130,41 @@ function loadCases(args) {
   return [...inlineCases, ...fileCases];
 }
 
+function loadFeedback(path) {
+  if (!path) return [];
+  const value = JSON.parse(readFileSync(path, "utf8"));
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value.feedback)) return value.feedback;
+  throw new Error("--feedback-file must contain a JSON array or an object with a feedback array.");
+}
+
+function summarizeFeedback(feedback) {
+  const summary = {
+    items: feedback.length,
+    falsePositive: 0,
+    falseNegative: 0,
+    severityMismatch: 0,
+    rules: {},
+  };
+  for (const item of feedback) {
+    const outcome = String(item.outcome || item.type || "").toLowerCase();
+    const rule = item.rule || "unknown";
+    summary.rules[rule] = summary.rules[rule] || { total: 0, falsePositive: 0, falseNegative: 0, severityMismatch: 0 };
+    summary.rules[rule].total += 1;
+    if (/false[-_ ]?positive|fp/.test(outcome)) {
+      summary.falsePositive += 1;
+      summary.rules[rule].falsePositive += 1;
+    } else if (/false[-_ ]?negative|fn/.test(outcome)) {
+      summary.falseNegative += 1;
+      summary.rules[rule].falseNegative += 1;
+    } else if (/severity|priority|classif/.test(outcome)) {
+      summary.severityMismatch += 1;
+      summary.rules[rule].severityMismatch += 1;
+    }
+  }
+  return summary;
+}
+
 function summarizePacket(packet) {
   return {
     repositories: packet.crossRepoSummary?.repositoriesWithChanges || 0,
@@ -155,7 +196,21 @@ function renderMarkdown(report) {
   lines.push("## Calibration Notes");
   lines.push("- Compare each packet against human review notes or known post-merge bugs.");
   lines.push("- Mark false positives, false negatives, and severity mismatches in the cases file.");
+  lines.push("- Feed reviewer outcomes through `--feedback-file` using `templates/reviewer-feedback.example.json` to calibrate noisy rules and missed risks.");
   lines.push("- Tune `.agentic-reviewrc.json` thresholds/severities before changing generic rules.");
+  if (report.feedbackSummary) {
+    lines.push("");
+    lines.push("## Reviewer Feedback Summary");
+    lines.push(`Items: ${report.feedbackSummary.items}`);
+    lines.push(`False positives: ${report.feedbackSummary.falsePositive}`);
+    lines.push(`False negatives: ${report.feedbackSummary.falseNegative}`);
+    lines.push(`Severity mismatches: ${report.feedbackSummary.severityMismatch}`);
+    const noisyRules = Object.entries(report.feedbackSummary.rules)
+      .sort(([, a], [, b]) => b.total - a.total)
+      .slice(0, 10)
+      .map(([rule, value]) => `${rule} (${value.total})`);
+    lines.push(`Top rules: ${noisyRules.length ? noisyRules.join(", ") : "none"}`);
+  }
   lines.push("");
   return lines.join("\n");
 }
@@ -167,6 +222,7 @@ if (!args.repo || !existsSync(args.repo)) {
 }
 
 const cases = loadCases(args);
+const feedback = loadFeedback(args.feedbackFile);
 if (cases.length === 0) {
   usage();
   process.exit(2);
@@ -175,6 +231,7 @@ if (cases.length === 0) {
 const report = {
   repository: args.repo,
   generatedAt: new Date().toISOString(),
+  feedbackSummary: feedback.length > 0 ? summarizeFeedback(feedback) : null,
   cases: cases.map((testCase) => {
     const result = run(process.execPath, [collector, "--root", args.repo, "--base", testCase.base, "--head", testCase.head, "--json"], args.repo);
     if (!result.ok) {

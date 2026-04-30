@@ -1,0 +1,27 @@
+{
+  "feedback": [
+    {
+      "case": "pr-101",
+      "rule": "magic-string",
+      "outcome": "false-positive",
+      "reviewer": "human",
+      "notes": "Literal is accepted test fixture vocabulary, not a production contract."
+    },
+    {
+      "case": "post-merge-bug-2026-04",
+      "rule": "event-consumer-without-idempotency-signal",
+      "outcome": "false-negative",
+      "reviewer": "human",
+      "notes": "Reviewer caught duplicate queue processing that the previous scanner missed."
+    },
+    {
+      "case": "pr-157",
+      "rule": "api-controller-without-openapi-contract-signal",
+      "outcome": "severity-mismatch",
+      "expectedSeverity": "medium",
+      "actualSeverity": "low",
+      "reviewer": "human",
+      "notes": "Route is public and mobile consumed, so contract drift should be stronger."
+    }
+  ]
+}

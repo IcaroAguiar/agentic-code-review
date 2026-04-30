@@ -21,8 +21,9 @@ Examples:
   npx agentic-code-review install
   npx agentic-code-review collect --base origin/main
   npx agentic-code-review collect --base origin/main --json
+  npx agentic-code-review collect --full-repo --json
   npx agentic-code-review collect --root ../api --root ../web
-  npx agentic-code-review calibrate --repo . --case pr-101:abc123:def456
+  npx agentic-code-review calibrate --repo . --case pr-101:abc123:def456 --feedback-file reviewer-feedback.json
   npx agentic-code-review smoke
 `);
 }

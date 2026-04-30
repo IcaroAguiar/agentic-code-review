@@ -53,6 +53,7 @@ function parseArgs(argv) {
   let configPath = "";
   let runExternalTools = false;
   let allowToolDownloads = false;
+  let fullRepository = false;
   let externalToolTimeoutMs = 60_000;
   const externalTools = [];
 
@@ -74,6 +75,13 @@ function parseArgs(argv) {
       runExternalTools = true;
     } else if (arg === "--allow-tool-downloads") {
       allowToolDownloads = true;
+    } else if (arg === "--full-repo" || arg === "--all-files") {
+      fullRepository = true;
+    } else if (arg === "--scope" && argv[index + 1] === "full") {
+      fullRepository = true;
+      index += 1;
+    } else if (arg.startsWith("--scope=") && arg.split("=").slice(1).join("=") === "full") {
+      fullRepository = true;
     } else if (arg === "--external-tool") {
       externalTools.push(argv[index + 1] || "");
       index += 1;
@@ -104,7 +112,7 @@ function parseArgs(argv) {
     }
   }
 
-  return { roots, discoverDepth, includeClean, base, head, json, configPath, runExternalTools, allowToolDownloads, externalToolTimeoutMs, externalTools: externalTools.filter(Boolean) };
+  return { roots, discoverDepth, includeClean, base, head, json, configPath, runExternalTools, allowToolDownloads, fullRepository, externalToolTimeoutMs, externalTools: externalTools.filter(Boolean) };
 }
 
 const defaultConfig = {
@@ -129,6 +137,8 @@ const defaultConfig = {
   performanceTargets: [],
   a11yTargets: [],
   externalToolTimeoutMs: undefined,
+  coverageLinesMin: undefined,
+  reviewFeedbackPath: "",
 };
 
 function readJsonConfig(path) {
@@ -269,6 +279,8 @@ function resolveBase(root, explicitBase) {
 }
 
 function changedFileEntries(root, base) {
+  if (args.fullRepository) return trackedFileEntries(root);
+
   const baseRef = resolveBase(root, base);
   if (args.head) {
     const committedRange = baseRef ? `${baseRef}...${args.head}` : args.head;
@@ -290,6 +302,13 @@ function changedFileEntries(root, base) {
   const byPath = new Map();
   for (const entry of entries) byPath.set(entry.path, entry);
   return [...byPath.values()];
+}
+
+function trackedFileEntries(root) {
+  const tracked = args.head
+    ? run("git", ["ls-tree", "-r", "--name-only", args.head], root)
+    : run("git", ["ls-files"], root);
+  return splitLines(tracked.ok ? tracked.stdout : "").map((path) => ({ path, status: "T" }));
 }
 
 function parseChangedLines(diffOutput) {
@@ -327,6 +346,10 @@ function mergeChangedLines(target, source) {
 }
 
 function changedLineMap(root, base, entries) {
+  if (args.fullRepository) {
+    return new Map(entries.map((entry) => [entry.path, null]));
+  }
+
   const baseRef = resolveBase(root, base);
   const result = new Map();
 
@@ -1473,6 +1496,207 @@ function scanObservabilityAndResilience(repo) {
   return findings;
 }
 
+function resolveLocalImport(fromFile, specifier, files) {
+  if (!specifier || !specifier.startsWith(".")) return "";
+  const baseParts = fromFile.split("/");
+  baseParts.pop();
+  for (const part of specifier.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") baseParts.pop();
+    else baseParts.push(part);
+  }
+  const base = baseParts.join("/");
+  const candidates = [
+    base,
+    `${base}.ts`,
+    `${base}.tsx`,
+    `${base}.js`,
+    `${base}.jsx`,
+    `${base}.mjs`,
+    `${base}.cjs`,
+    `${base}.py`,
+    `${base}.java`,
+    `${base}/index.ts`,
+    `${base}/index.tsx`,
+    `${base}/index.js`,
+    `${base}/index.jsx`,
+  ];
+  return candidates.find((candidate) => files.has(candidate)) || "";
+}
+
+function buildLocalDependencyGraph(repo) {
+  const graph = new Map();
+  const files = new Set(existingFiles(repo.root, repo.entries).filter((value) => isCode(value)));
+  for (const file of files) {
+    const text = readFile(repo.root, file);
+    const deps = new Set();
+    const importPatterns = [
+      /\bimport(?:\s+type)?[\s\S]{0,180}?\bfrom\s*["'`]([^"'`]+)["'`]/g,
+      /\brequire\s*\(\s*["'`]([^"'`]+)["'`]\s*\)/g,
+      /\bfrom\s+([.][\w./-]+)\s+import\b/g,
+    ];
+    for (const pattern of importPatterns) {
+      for (const match of text.matchAll(pattern)) {
+        const resolved = resolveLocalImport(file, match[1], files);
+        if (resolved) deps.add(resolved);
+      }
+    }
+    graph.set(file, deps);
+  }
+  return graph;
+}
+
+function detectGraphCycles(graph, limit = 8) {
+  const cycles = [];
+  const visiting = new Set();
+  const visited = new Set();
+  const stack = [];
+
+  function visit(file) {
+    if (cycles.length >= limit) return;
+    if (visiting.has(file)) {
+      const start = stack.indexOf(file);
+      if (start >= 0) cycles.push([...stack.slice(start), file]);
+      return;
+    }
+    if (visited.has(file)) return;
+    visiting.add(file);
+    stack.push(file);
+    for (const dep of graph.get(file) || []) visit(dep);
+    stack.pop();
+    visiting.delete(file);
+    visited.add(file);
+  }
+
+  for (const file of graph.keys()) visit(file);
+  return cycles;
+}
+
+function scanRepositoryGraphAndFlows(repo) {
+  const findings = [];
+  const graph = buildLocalDependencyGraph(repo);
+  const cycles = detectGraphCycles(graph);
+  for (const cycle of cycles) {
+    const file = cycle[0];
+    if (changedLineCount(repo, file) === 0) continue;
+    addFinding(
+      findings,
+      "dependency-cycle-detected",
+      "medium",
+      repo.name,
+      file,
+      "-",
+      cycle.join(" -> "),
+      "Break circular dependencies through a narrower port/interface, extracted shared helper, or clearer layer boundary before the cycle hardens."
+    );
+  }
+
+  for (const [file, deps] of graph.entries()) {
+    if (changedLineCount(repo, file) === 0) continue;
+    const text = readFile(repo.root, file);
+    const depTexts = [...deps].map((dep) => [dep, readFile(repo.root, dep)]);
+    const isBoundary = /(controller|resolver|route|handler|page|component)\.[cm]?[jt]sx?$|(^|\/)(controllers?|resolvers?|routes?|handlers?|pages?|components?)\//i.test(file);
+    const sensitiveBoundary = isBoundary && /\b(password|token|secret|credential|cpf|cnpj|pii|personalData|permission|role|tenantId|session|cookie)\b/i.test(text);
+    const hasPersistenceDep = depTexts.some(([dep, depText]) => /(repository|prisma|typeorm|sequelize|mongoose|database|persistence|dao)\b/i.test(dep + "\n" + depText));
+    if (sensitiveBoundary && hasPersistenceDep) {
+      addFinding(
+        findings,
+        "sensitive-data-crosses-layer-without-boundary",
+        "medium",
+        repo.name,
+        file,
+        "-",
+        "Sensitive/auth/privacy vocabulary in boundary file depends on persistence/data layer through local import graph.",
+        "Route sensitive data through explicit application services, DTOs, policies, and redaction/authorization boundaries instead of leaking it across presentation/transport and persistence layers."
+      );
+    }
+
+    if (isBoundary && depTexts.some(([, depText]) => /\b(for|forEach|map)\s*\(|for\s*\([^)]*of[^)]*\)/.test(depText) && /\b(findMany|findUnique|findOne|findAll|query|select|SELECT)\s*\(/i.test(depText))) {
+      addFinding(
+        findings,
+        "n-plus-one-through-route-call-chain-signal",
+        "medium",
+        repo.name,
+        file,
+        "-",
+        "Boundary file imports code whose local dependency text combines iteration and query calls.",
+        "Use the call/dependency graph to inspect the route/resolver path for N+1 behavior; batch, join, prefetch, or DataLoader the access before approving scale-sensitive paths."
+      );
+    }
+  }
+
+  return findings;
+}
+
+function scanAsyncEventsAndServerless(repo) {
+  const findings = [];
+  const eventFilePattern = /(queue|consumer|worker|job|processor|subscriber|listener|event|handler|lambda|function|serverless)\b/i;
+
+  for (const file of existingFiles(repo.root, repo.entries).filter((value) => (isCode(value) || isStructuredConfig(value)) && !isTest(value))) {
+    if (changedLineCount(repo, file) === 0) continue;
+    const text = readFile(repo.root, file);
+    if (!eventFilePattern.test(file + "\n" + text)) continue;
+    const lines = text.split(/\r?\n/);
+    const emitted = new Set();
+
+    lines.forEach((lineText, index) => {
+      const line = index + 1;
+      const window = lines.slice(Math.max(0, index - 6), Math.min(lines.length, index + 14)).join("\n");
+      if (!windowTouchesChangedLine(repo, file, Math.max(1, line - 6), window.split(/\r?\n/).length)) return;
+
+      if (/\b(process[A-Z]?\w*|handle[A-Z]?\w*|consume[A-Z]?\w*|subscribe|onMessage|MessagePattern|EventPattern|Queue|Worker|Consumer|lambda|handler)\b/i.test(window)
+        && /\b(queue|topic|event|message|job|sqs|sns|kafka|rabbit|bull|pubsub|lambda)\b/i.test(window)
+        && !/\b(idempot|dedup|messageId|eventId|jobId|idempotencyKey|once|unique|processed|lock|outbox|inbox)\b/i.test(window)
+        && !emitted.has("event-consumer-without-idempotency-signal")) {
+        emitted.add("event-consumer-without-idempotency-signal");
+        addFinding(
+          findings,
+          "event-consumer-without-idempotency-signal",
+          "medium",
+          repo.name,
+          file,
+          line,
+          window,
+          "Async consumers should show idempotency/deduplication or processed-message state because retries and duplicate delivery are normal in queues/events."
+        );
+      }
+
+      if (/\b(retry|attempt|backoff|concurrency|parallel|worker|queue|rateLimit)\b/i.test(window)
+        && !/\b(maxAttempts|maxRetries|exponential|jitter|delay|backoff|timeout|concurrency\s*[:=]\s*\d+|limiter|Semaphore|p-limit)\b/i.test(window)
+        && !emitted.has("event-worker-without-backoff-or-concurrency-limit")) {
+        emitted.add("event-worker-without-backoff-or-concurrency-limit");
+        addFinding(
+          findings,
+          "event-worker-without-backoff-or-concurrency-limit",
+          "medium",
+          repo.name,
+          file,
+          line,
+          window,
+          "Workers and event processors should bound retries, backoff, timeout, and concurrency to avoid duplicate writes or thundering-herd failures."
+        );
+      }
+    });
+
+    if (/(serverless\.ya?ml|template\.ya?ml|function|lambda|vercel\.json|netlify\.toml)$/i.test(file)
+      && /\b(handler|runtime|functions?|lambda|memory|timeout|duration)\b/i.test(text)
+      && !/\b(timeout|timeoutSeconds|maxDuration|memorySize|memory|reservedConcurrency|concurrency)\b/i.test(text)) {
+      addFinding(
+        findings,
+        "serverless-function-without-runtime-limits",
+        "medium",
+        repo.name,
+        file,
+        "-",
+        "Serverless/function config has runtime/function signals but no obvious timeout, memory, max duration, or concurrency controls.",
+        "Set explicit timeout/memory/concurrency limits and test the failure mode so production cannot hang, exhaust quota, or retry unsafe work indefinitely."
+      );
+    }
+  }
+
+  return findings;
+}
+
 function scanFrameworkSpecific(repo) {
   const findings = [];
   for (const file of existingFiles(repo.root, repo.entries).filter((value) => isCode(value) && !isTest(value))) {
@@ -1818,6 +2042,152 @@ function scanGraphqlGrpcRealtimeDesign(repo) {
         );
       }
     });
+  }
+
+  return findings;
+}
+
+function scanApiContractCoherence(repo) {
+  const findings = [];
+  const files = existingFiles(repo.root, repo.entries);
+  const changedOrFullFiles = files.filter((file) => changedLineCount(repo, file) > 0);
+  const hasOpenApi = files.some((file) => /(openapi|swagger).*\.(json|ya?ml)$|(^|\/)(openapi|swagger)\//i.test(file));
+  const hasGraphqlSchema = files.some((file) => /\.(graphql|gql)$/i.test(file));
+  const hasProto = files.some((file) => /\.proto$/i.test(file));
+  const hasBufConfig = files.some((file) => /(^|\/)buf\.(yaml|yml|json)$|(^|\/)buf\.lock$/i.test(file));
+  const contractTouched = changedOrFullFiles.some((file) => isContractLikeFile(file) || /(openapi|swagger|graphql|gql|proto)/i.test(file));
+
+  for (const file of changedOrFullFiles.filter((value) => isCode(value) && !isTest(value))) {
+    const text = readFile(repo.root, file);
+    const isRest = /(controller|route|routes|router|handler|api)\.[cm]?[jt]sx?$|(^|\/)(controllers?|routes?|api|handlers?)\//i.test(file)
+      && /(@(Get|Post|Put|Patch|Delete)\s*\(|\b(app|router|server)\.(get|post|put|patch|delete)\s*\()/.test(text);
+    const isGraphql = /(resolver|graphql|schema)\.[cm]?[jt]s$|(^|\/)(graphql|resolvers?)\//i.test(file)
+      && /@(Query|Mutation|Subscription)\b|\b(ResolveField|resolver|typeDefs|gql)\b/i.test(text);
+
+    if (isRest && !hasOpenApi && !/ApiOperation|ApiResponse|ApiBody|ApiParam|ApiQuery|OpenAPI|swagger/i.test(text)) {
+      addFinding(
+        findings,
+        "api-controller-without-openapi-contract-signal",
+        "low",
+        repo.name,
+        file,
+        "-",
+        "REST/controller implementation changed but no OpenAPI/swagger contract or inline contract decorators were found.",
+        "For public or cross-repo APIs, keep controller input/output/status behavior aligned with OpenAPI or an equivalent consumer contract."
+      );
+    }
+
+    if (isGraphql && !hasGraphqlSchema && !/\b(depthLimit|complexity|costAnalysis|validationRules|DataLoader|@Directive)\b/i.test(text)) {
+      addFinding(
+        findings,
+        "graphql-resolver-without-schema-or-complexity-signal",
+        "low",
+        repo.name,
+        file,
+        "-",
+        "GraphQL resolver changed without a visible SDL/schema file or query depth/complexity policy.",
+        "Review the resolver against the GraphQL schema, auth policy, depth/complexity limits, and pagination/connection contract."
+      );
+    }
+  }
+
+  if (hasProto && !hasBufConfig && contractTouched) {
+    const protoFile = changedOrFullFiles.find((file) => /\.proto$/i.test(file)) || files.find((file) => /\.proto$/i.test(file)) || "-";
+    addFinding(
+      findings,
+      "protobuf-contract-without-breaking-check-signal",
+      "low",
+      repo.name,
+      protoFile,
+      "-",
+      "Protobuf/gRPC contract is present but no buf config/lockfile was found for lint or breaking-change checks.",
+      "Use buf or an equivalent compatibility check to protect field numbers, reserved fields, package versioning, and consumer compatibility."
+    );
+  }
+
+  return findings;
+}
+
+function scanCoverageAndDocumentation(repo) {
+  const findings = [];
+  const files = existingFiles(repo.root, repo.entries);
+  const changedOrFullFiles = files.filter((file) => changedLineCount(repo, file) > 0);
+  const codeChanged = changedOrFullFiles.some((file) => isCode(file) && !isTest(file));
+  const apiChanged = changedOrFullFiles.some((file) => /(controller|route|routes|router|handler|api|resolver|graphql|proto)\b/i.test(file));
+  const manifestChanged = changedOrFullFiles.some((file) => /(package\.json|pyproject\.toml|go\.mod|Gemfile|Cargo\.toml|requirements|Dockerfile|compose|\.env\.example)/i.test(file));
+  const readmePath = files.find((file) => /(^|\/)README(\.[\w-]+)?$/i.test(file)) || "";
+  const contributingPath = files.find((file) => /(^|\/)CONTRIBUTING(\.[\w-]+)?$/i.test(file)) || "";
+
+  const coverageCandidates = [
+    "coverage/coverage-summary.json",
+    "coverage/coverage-final.json",
+  ];
+  for (const coverageFile of coverageCandidates) {
+    if (!existsSync(join(repo.root, coverageFile))) continue;
+    try {
+      const report = JSON.parse(readFileSync(join(repo.root, coverageFile), "utf8"));
+      const pct = report.total?.lines?.pct ?? report.total?.statements?.pct;
+      const min = Number(repo.config.coverageLinesMin || (repo.config.appType === "public-api" || repo.config.appType === "microservice" ? 85 : 80));
+      if (typeof pct === "number" && pct < min && codeChanged) {
+        addFinding(
+          findings,
+          "coverage-report-below-threshold",
+          "low",
+          repo.name,
+          coverageFile,
+          "-",
+          `Coverage lines/statements ${pct}% below configured minimum ${min}%.`,
+          "Inspect uncovered changed or critical files and add focused tests around auth, persistence, contracts, events, and failure paths before relying on broad coverage."
+        );
+      }
+    } catch {
+      addFinding(
+        findings,
+        "coverage-report-unreadable",
+        "low",
+        repo.name,
+        coverageFile,
+        "-",
+        "Coverage report exists but could not be parsed as JSON.",
+        "Regenerate coverage or point the review to a readable report before using coverage as evidence."
+      );
+    }
+    break;
+  }
+
+  if ((apiChanged || manifestChanged || args.fullRepository) && readmePath) {
+    const readme = readFile(repo.root, readmePath);
+    const missing = [];
+    if (apiChanged && !/\b(endpoint|route|API|OpenAPI|GraphQL|gRPC|version|v\d+|pagination|rate limit|idempotency)\b/i.test(readme)) missing.push("API endpoints/versioning");
+    if (manifestChanged && !/\b(env|environment|configuration|DATABASE_URL|API_KEY|secret|setup|usage|example)\b/i.test(readme)) missing.push("environment/setup examples");
+    if (missing.length > 0) {
+      addFinding(
+        findings,
+        "readme-missing-api-env-usage-signal",
+        "low",
+        repo.name,
+        readmePath,
+        "-",
+        `README may be missing: ${missing.join(", ")}.`,
+        "Document public endpoints/contracts, versioning, required environment variables, and minimal usage examples when the repository exposes API/runtime surfaces."
+      );
+    }
+  }
+
+  if ((apiChanged || codeChanged || args.fullRepository) && contributingPath) {
+    const contributing = readFile(repo.root, contributingPath);
+    if (!/\b(test|lint|format|typecheck|coverage|review|small PR|pull request|200|400)\b/i.test(contributing)) {
+      addFinding(
+        findings,
+        "contributing-missing-review-test-policy",
+        "low",
+        repo.name,
+        contributingPath,
+        "-",
+        "CONTRIBUTING exists but no obvious test/review/small-PR policy was detected.",
+        "Document expected review evidence, focused tests, formatting/linting, and small single-responsibility PR guidance."
+      );
+    }
   }
 
   return findings;
@@ -2497,15 +2867,15 @@ function reviewQuestionsForRepo(repo, findings) {
     questions.push("O fluxo de upload exige limites de tamanho, allowlist de tipo, sanitização de nome, armazenamento isolado ou varredura antimalware?");
   }
 
-  if (rules.has("retry-without-backoff-or-timeout") || rules.has("shared-state-without-lock-signal")) {
+  if (rules.has("retry-without-backoff-or-timeout") || rules.has("shared-state-without-lock-signal") || rules.has("event-consumer-without-idempotency-signal") || rules.has("event-worker-without-backoff-or-concurrency-limit") || rules.has("serverless-function-without-runtime-limits")) {
     questions.push("Há expectativa de concorrência, carga, filas ou reprocessamento que exige teste de race/idempotência/backoff antes de aprovar?");
   }
 
-  if (rules.has("rest-route-uses-verb-segment") || rules.has("rest-get-mutating-action-signal") || rules.has("rest-list-without-pagination-or-filter-signal") || rules.has("public-rest-route-without-version-signal")) {
+  if (rules.has("rest-route-uses-verb-segment") || rules.has("rest-get-mutating-action-signal") || rules.has("rest-list-without-pagination-or-filter-signal") || rules.has("public-rest-route-without-version-signal") || rules.has("api-controller-without-openapi-contract-signal")) {
     questions.push("A API alterada segue o contrato público esperado para recursos REST, versionamento, paginação/filtros, status codes e compatibilidade OpenAPI/cliente?");
   }
 
-  if (rules.has("graphql-resolver-n-plus-one-or-unbounded-risk") || rules.has("graphql-mutation-without-boundary-controls") || rules.has("graphql-subscription-without-scope-or-backpressure") || rules.has("grpc-proto-without-compatibility-signal") || rules.has("websocket-handler-without-auth-or-backpressure")) {
+  if (rules.has("graphql-resolver-n-plus-one-or-unbounded-risk") || rules.has("graphql-mutation-without-boundary-controls") || rules.has("graphql-subscription-without-scope-or-backpressure") || rules.has("graphql-resolver-without-schema-or-complexity-signal") || rules.has("grpc-proto-without-compatibility-signal") || rules.has("protobuf-contract-without-breaking-check-signal") || rules.has("websocket-handler-without-auth-or-backpressure")) {
     questions.push("A API não-REST alterada tem contrato/versionamento, limites de complexidade/paginação, auth/tenant scope, compatibilidade e teste de carga/realtime quando aplicável?");
   }
 
@@ -2513,8 +2883,12 @@ function reviewQuestionsForRepo(repo, findings) {
     questions.push("O fluxo alterado precisa de observabilidade operacional nesta entrega: logs estruturados, correlation/trace IDs, métricas, auditoria ou circuit breaker?");
   }
 
-  if (rules.has("domain-layer-imports-outer-layer") || rules.has("presentation-imports-data-layer") || rules.has("missing-port-interface-boundary") || rules.has("ui-mixes-presentation-and-data-access")) {
+  if (rules.has("domain-layer-imports-outer-layer") || rules.has("presentation-imports-data-layer") || rules.has("missing-port-interface-boundary") || rules.has("ui-mixes-presentation-and-data-access") || rules.has("dependency-cycle-detected") || rules.has("sensitive-data-crosses-layer-without-boundary") || rules.has("n-plus-one-through-route-call-chain-signal")) {
     questions.push("A separação entre apresentação, aplicação/domínio e dados faz parte do escopo desta entrega, ou há uma restrição explícita para aceitar acoplamento temporário?");
+  }
+
+  if (rules.has("coverage-report-below-threshold") || rules.has("coverage-report-unreadable") || rules.has("readme-missing-api-env-usage-signal") || rules.has("contributing-missing-review-test-policy")) {
+    questions.push("A documentação e cobertura disponíveis são critérios bloqueantes nesta entrega, ou devem gerar follow-up explícito com dono e escopo?");
   }
 
   if (rules.has("ui-page-without-semantic-landmarks") || rules.has("ui-image-missing-alt") || rules.has("ui-input-without-label-signal") || rules.has("ui-clickable-div-without-keyboard-semantics") || rules.has("ui-anchor-used-as-button") || rules.has("ui-button-used-as-link")) {
@@ -2599,7 +2973,7 @@ function runtimeVerificationRequirementsForRepo(repo, findings, repositoryCount)
     requirements.push("For changed service/controller/handler/repository/hook boundaries, prove the boundary through a focused unit/integration/e2e path or explain why the exact path cannot run.");
   }
 
-  if (rules.has("rest-route-uses-verb-segment") || rules.has("rest-get-mutating-action-signal") || rules.has("rest-mutation-without-status-signal") || rules.has("rest-list-without-pagination-or-filter-signal") || rules.has("public-rest-route-without-version-signal")) {
+  if (rules.has("rest-route-uses-verb-segment") || rules.has("rest-get-mutating-action-signal") || rules.has("rest-mutation-without-status-signal") || rules.has("rest-list-without-pagination-or-filter-signal") || rules.has("public-rest-route-without-version-signal") || rules.has("api-controller-without-openapi-contract-signal")) {
     requirements.push("For REST/API design signals, exercise the real route/controller/handler contract, including status code, method semantics, pagination/filter behavior, and OpenAPI/client compatibility when public.");
   }
 
@@ -2607,11 +2981,11 @@ function runtimeVerificationRequirementsForRepo(repo, findings, repositoryCount)
     requirements.push("For NestJS framework signals, exercise the real controller/provider/DTO boundary through Nest testing module, HTTP/integration, or e2e coverage that proves DI, validation pipe behavior, guard/public-route intent, and persistence boundary behavior.");
   }
 
-  if (rules.has("graphql-resolver-n-plus-one-or-unbounded-risk") || rules.has("graphql-mutation-without-boundary-controls") || rules.has("graphql-subscription-without-scope-or-backpressure") || rules.has("graphql-introspection-enabled-without-prod-guard")) {
+  if (rules.has("graphql-resolver-n-plus-one-or-unbounded-risk") || rules.has("graphql-mutation-without-boundary-controls") || rules.has("graphql-subscription-without-scope-or-backpressure") || rules.has("graphql-introspection-enabled-without-prod-guard") || rules.has("graphql-resolver-without-schema-or-complexity-signal")) {
     requirements.push("For GraphQL signals, exercise the real resolver/schema path and prove auth, pagination/complexity limits, DataLoader/batching, subscription scope/backpressure, and production introspection behavior when applicable.");
   }
 
-  if (rules.has("grpc-proto-without-compatibility-signal") || rules.has("websocket-handler-without-auth-or-backpressure")) {
+  if (rules.has("grpc-proto-without-compatibility-signal") || rules.has("protobuf-contract-without-breaking-check-signal") || rules.has("websocket-handler-without-auth-or-backpressure")) {
     requirements.push("For gRPC/WebSocket/realtime signals, run producer/consumer or protocol-level smoke tests that prove compatibility, authorization, validation, and disconnect/backpressure behavior.");
   }
 
@@ -2635,12 +3009,16 @@ function runtimeVerificationRequirementsForRepo(repo, findings, repositoryCount)
     requirements.push("For UI performance/bundle signals, measure or test the changed path with debounce/cancellation behavior, render responsiveness, lazy/code-split boundary, or bundle-size budget evidence.");
   }
 
-  if (rules.has("domain-layer-imports-outer-layer") || rules.has("presentation-imports-data-layer") || rules.has("missing-port-interface-boundary") || rules.has("ui-mixes-presentation-and-data-access")) {
+  if (rules.has("domain-layer-imports-outer-layer") || rules.has("presentation-imports-data-layer") || rules.has("missing-port-interface-boundary") || rules.has("ui-mixes-presentation-and-data-access") || rules.has("dependency-cycle-detected") || rules.has("sensitive-data-crosses-layer-without-boundary")) {
     requirements.push("For architecture/layering signals, prove the refactored or accepted boundary through tests at the intended layer and ensure runtime behavior still flows through the public entrypoint rather than a copied implementation.");
   }
 
-  if (rules.has("possible-n-plus-one-query") || rules.has("parallel-n-plus-one-query") || rules.has("sequential-query-in-loop")) {
+  if (rules.has("possible-n-plus-one-query") || rules.has("parallel-n-plus-one-query") || rules.has("sequential-query-in-loop") || rules.has("n-plus-one-through-route-call-chain-signal")) {
     requirements.push("For N+1 signals, use a test/probe that fails or exposes repeated query count at scale, then prove the batched path stays bounded.");
+  }
+
+  if (rules.has("event-consumer-without-idempotency-signal") || rules.has("event-worker-without-backoff-or-concurrency-limit") || rules.has("serverless-function-without-runtime-limits")) {
+    requirements.push("For event/serverless signals, run consumer/function tests that prove idempotency or deduplication, retry/backoff/concurrency limits, and timeout/memory behavior on the real handler path.");
   }
 
   if (rules.has("unbounded-list-query")) {
@@ -2676,6 +3054,10 @@ function runtimeVerificationRequirementsForRepo(repo, findings, repositoryCount)
 
   if (rules.has("external-call-without-timeout-or-resilience") || rules.has("critical-boundary-without-instrumentation-signal") || rules.has("unstructured-error-log-without-correlation") || rules.has("security-event-without-observability-signal")) {
     requirements.push("For observability/resilience signals, run failure-path or boundary tests/probes that prove timeout/circuit-breaker behavior and safe structured logs/metrics/traces/audit events on critical errors.");
+  }
+
+  if (rules.has("coverage-report-below-threshold") || rules.has("coverage-report-unreadable")) {
+    requirements.push("For coverage-report signals, identify the uncovered critical files/branches and run or add focused tests for the changed or historically risky behavior.");
   }
 
   if (rules.has("shared-state-without-lock-signal")) {
@@ -3036,9 +3418,12 @@ for (const repo of repos) {
     ...scanWebAndRuntimeSecurity(repo),
     ...scanUnboundedDataAccess(repo),
     ...scanObservabilityAndResilience(repo),
+    ...scanRepositoryGraphAndFlows(repo),
+    ...scanAsyncEventsAndServerless(repo),
     ...scanFrameworkSpecific(repo),
     ...scanRestApiDesign(repo),
     ...scanGraphqlGrpcRealtimeDesign(repo),
+    ...scanApiContractCoherence(repo),
     ...scanUiSemanticsAndA11y(repo),
     ...scanAdvancedA11y(repo),
     ...scanPublicContractIntegrity(repo),
@@ -3048,6 +3433,7 @@ for (const repo of repos) {
     ...scanCouplingAndComplexity(repo),
     ...scanArchitectureBoundaries(repo),
     ...scanTests(repo),
+    ...scanCoverageAndDocumentation(repo),
     ...scanBackendCoverage(repo),
     ...scanCrossRepoContracts(repo, repos.length),
     ...scanPackageImpact(repo),
@@ -3076,7 +3462,7 @@ for (const repo of repos) {
     testFiles: files.filter(isTest).length,
     riskSignals: risks,
     files: repo.entries.map((entry) => ({
-      status: entry.status === "D" ? "deleted" : entry.status === "A" ? "added" : entry.status === "M" ? "modified" : entry.status,
+      status: entry.status === "D" ? "deleted" : entry.status === "A" ? "added" : entry.status === "M" ? "modified" : entry.status === "T" ? "tracked" : entry.status,
       path: entry.path,
       previousPath: entry.previousPath,
     })),
@@ -3119,6 +3505,7 @@ const packet = {
   status: "ok",
   startDirectory: startCwd,
   configPath: startConfigPath || null,
+  collectorScope: args.fullRepository ? "full-repository" : "diff",
   repositories: repositoryPackets,
   crossRepoSummary: {
     repositoriesWithChanges: repos.length,
@@ -3149,6 +3536,7 @@ if (args.json) {
 console.log("# Agentic Code Review Packet");
 console.log("");
 console.log(`Start directory: ${packet.startDirectory}`);
+console.log(`Collector scope: ${args.fullRepository ? "full repository" : "diff"}`);
 if (packet.configPath) console.log(`Config: ${packet.configPath}`);
 
 for (const repoPacket of packet.repositories) {

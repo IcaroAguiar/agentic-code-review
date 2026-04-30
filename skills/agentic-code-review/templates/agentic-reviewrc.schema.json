@@ -59,6 +59,14 @@
     "bundleStatsPath": {
       "type": "string"
     },
+    "coverageLinesMin": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "reviewFeedbackPath": {
+      "type": "string"
+    },
     "externalToolTimeoutMs": {
       "type": "number",
       "minimum": 1000
