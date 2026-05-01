@@ -222,6 +222,16 @@ export const auditSchema = z.object({
   return values.reduce((sum, value) => sum + value, 0);
 }
 `,
+      "playwright.config.ts": `import { defineConfig, devices } from "@playwright/test";
+export default defineConfig({
+  retries: 0,
+  workers: 1,
+  use: {
+    ...devices["Desktop Chrome"],
+    baseURL: "http://127.0.0.1:3000",
+  },
+});
+`,
     },
     assert(output) {
       expectNotIncludes(this.name, output, "open-redirect-risk");
@@ -229,6 +239,7 @@ export const auditSchema = z.object({
       expectNotIncludes(this.name, output, "ssrf-risk-unvalidated-url-fetch");
       expectNotIncludes(this.name, output, "config-token-weak-string-validation");
       expectNotIncludes(this.name, output, "possible-n-plus-one-query");
+      expectNotIncludes(this.name, output, "retry-without-backoff-or-timeout");
     },
   },
   {

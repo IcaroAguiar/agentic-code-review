@@ -8,6 +8,7 @@ export function findingCategory(finding, isTestFile) {
   }
   if ([
     "large-file-touched",
+    "large-controller",
     "single-responsibility-refactor-gate",
     "multiple-responsibilities-in-large-file",
     "long-function-touched",
@@ -28,6 +29,7 @@ export function findingCategory(finding, isTestFile) {
     "ui-page-without-semantic-landmarks",
     "ui-button-used-as-link",
     "missing-port-interface-boundary",
+    "presentation-imports-data-layer",
     "nestjs-controller-direct-data-access",
     "nestjs-mutating-route-without-auth-signal",
     "api-controller-without-openapi-contract-signal",
@@ -48,6 +50,7 @@ export function findingCategory(finding, isTestFile) {
     "redundant-or-conflicting-aria-role",
     "missing-skip-link-for-repeated-navigation",
     "ui-render-blocking-work-signal",
+    "ui-mixes-presentation-and-data-access",
     "heavy-dependency-without-bundle-budget",
   ].includes(finding.rule)) {
     return "review-signal";

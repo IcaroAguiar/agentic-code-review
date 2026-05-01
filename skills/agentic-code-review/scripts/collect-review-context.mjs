@@ -462,6 +462,11 @@ function isTest(file) {
     || /\.feature$/.test(file);
 }
 
+function isTestConfig(file) {
+  return /(^|\/)(playwright|vitest|jest|cypress|karma|wdio|test|testing)[\w.-]*\.config\.[cm]?[jt]s$/i.test(file)
+    || /(^|\/)(playwright|vitest|jest|cypress|wdio)\.config\./i.test(file);
+}
+
 function addFinding(findings, rule, severity, repo, file, line, text, suggestion) {
   const finding = {
     rule,
@@ -1445,7 +1450,8 @@ function scanWebAndRuntimeSecurity(repo) {
         );
       }
 
-      if (/\b(retry|retries|while\s*\(|for\s*\(|setInterval|poll)\b/i.test(window)
+      if (!isTestConfig(file)
+        && /\b(retry|retries|while\s*\(|for\s*\(|setInterval|poll)\b/i.test(window)
         && /\b(fetch|axios|request|http|queue|job|publish|send|client\.)\b/i.test(window)
         && !/\b(backoff|jitter|exponential|timeout|circuitBreaker|retryAfter|maxAttempts)\b/i.test(window)) {
         addFinding(
@@ -1859,7 +1865,7 @@ function scanFrameworkSpecific(repo) {
     if (/\.controller\.[cm]?[tj]s$/.test(file) && lines.length > 240) {
       findings.push({
         rule: "large-controller",
-        severity: "medium",
+        severity: "low",
         repo: repo.name,
         file,
         line: "-",
@@ -3076,7 +3082,7 @@ function scanArchitectureBoundaries(repo) {
         addFinding(
           findings,
           "presentation-imports-data-layer",
-          "medium",
+          "low",
           repo.name,
           file,
           lineForFirstOccurrence(text, imported),
@@ -3105,7 +3111,7 @@ function scanArchitectureBoundaries(repo) {
       addFinding(
         findings,
         "ui-mixes-presentation-and-data-access",
-        "medium",
+        "low",
         repo.name,
         file,
         "-",
