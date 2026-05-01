@@ -189,6 +189,49 @@ export async function retryJob(client: any) {
     },
   },
   {
+    name: "calibrated-false-positive-guards",
+    files: {
+      "src/internal-navigation.tsx": `export function goHome(navigate: any, submissionId: string) {
+  navigate({ to: "/submissoes/$submissionId", params: { submissionId } });
+  throw redirect({ to: "/entrar" });
+}
+`,
+      "src/fixed-parallel.ts": `export async function loadDetail(repo: any, id: string) {
+  const [user, profile, settings] = await Promise.all([
+    repo.user.findUnique({ where: { id } }),
+    repo.profile.findUnique({ where: { id } }),
+    repo.settings.findUnique({ where: { id } }),
+  ]);
+  return { user, profile, settings };
+}
+`,
+      "src/local-ai.ts": `export class LocalAiClient {
+  constructor(private readonly baseUrl: string) {}
+  async complete(prompt: string) {
+    return fetch(\`\${this.baseUrl}/completion\`, { method: "POST", body: JSON.stringify({ prompt }) });
+  }
+}
+`,
+      "src/schema.ts": `import { z } from "zod";
+export const auditSchema = z.object({
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+`,
+      "src/array-reduce.ts": `export function summarize(values: number[]) {
+  return values.reduce((sum, value) => sum + value, 0);
+}
+`,
+    },
+    assert(output) {
+      expectNotIncludes(this.name, output, "open-redirect-risk");
+      expectNotIncludes(this.name, output, "parallel-n-plus-one-query");
+      expectNotIncludes(this.name, output, "ssrf-risk-unvalidated-url-fetch");
+      expectNotIncludes(this.name, output, "config-token-weak-string-validation");
+      expectNotIncludes(this.name, output, "possible-n-plus-one-query");
+    },
+  },
+  {
     name: "artifact-checkpoint",
     files: {
       ".playwright-cli/session.json": `{"status":"local"}`,

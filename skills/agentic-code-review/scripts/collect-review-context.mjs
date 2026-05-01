@@ -562,7 +562,8 @@ function shouldTrackDuplicatedLiteral(file, lineText, value) {
 function isStaticRuleDefinitionWindow(window) {
   return (/\baddFinding\s*\(|\bsuggestion\s*:|Suggested patch|const patterns\s*=\s*\[/.test(window)
     && /\b(rule|severity|finding|scan|risk|suggestion|regex|pattern)\b/i.test(window))
-    || (/"[\w-]+"/.test(window) && /\b(findings|repo\.name|window|severity|suggestion|rule)\b/.test(window));
+    || (/"[\w-]+"/.test(window) && /\b(findings|repo\.name|window|severity|suggestion|rule)\b/.test(window))
+    || (/\bfunction\s+\w*(?:Pattern|Target|Controlled|Validator|Rule|Window)\b|\bconst\s+\w*Pattern\b/.test(window) && /\/.*\\b/.test(window));
 }
 
 function nearbyStaticRuleDefinition(lines, index, forward = 8) {
@@ -964,6 +965,30 @@ function queryPatternForLine(line) {
   return patterns.some((pattern) => pattern.test(line));
 }
 
+function hasVariableCardinalityIteration(line, window) {
+  return /\b(for|foreach|while|each)\b|\.(forEach|map|flatMap|collect)\s*\(/.test(line)
+    || /\bPromise\.all\s*\(\s*[\w.]+\.map\s*\(/.test(window)
+    || /\b(asyncio\.gather|Task\.WhenAll|errgroup\.Group|join_all)\s*\([^)]*(?:map|for|select)\b/i.test(window);
+}
+
+function hasUserControlledRedirectTarget(line, window) {
+  if (!/\bredirect\s*\(|res\.redirect|router\.push|navigate\s*\(|window\.location|location\.href/.test(line)) return false;
+  if (/to\s*:\s*["'`]\/[^"'`]*["'`]/.test(window) && !/\b(returnTo|redirectTo|callback|next|url|href|query|params|body|request|req\.)\s*[,}:]/i.test(window)) return false;
+  return /\b(req\.|request\.|query\.|params\.|body\.|returnTo|redirectTo|callback|nextUrl|next)\b/i.test(window)
+    || /\b(?:url|href)\b/i.test(line) && /\b(req\.|request\.|query\.|params\.|body\.|returnTo|redirectTo|callback|nextUrl|next)\b/i.test(window)
+    || /\bredirect\s*\(\s*[^"'`{]/.test(line)
+    || /\b(?:window\.location|location\.href)\s*=\s*[^"'`]/.test(line);
+}
+
+function hasUserControlledFetchTarget(line, window) {
+  if (!/\b(fetch|axios|request|http\.get|http\.request|urllib|requests\.get|Net::HTTP|Faraday)\s*\(/.test(line)) return false;
+  const callTarget = line.match(/\b(?:fetch|axios|request|http\.get|http\.request|urllib|requests\.get|Net::HTTP|Faraday)\s*\(\s*([^,\n)]+)/)?.[1] || "";
+  if (/\b(this\.baseUrl|baseUrl|BASE_URL|process\.env|config\.|settings\.|env\.)\b/.test(callTarget) && !/\b(req\.|request\.|params\.|query\.|body\.|input\.|callback|webhook)\b/.test(callTarget)) return false;
+  if (/\b(req\.|request\.|params\.|query\.|body\.|input\.|callback|webhook)\b/i.test(callTarget)) return true;
+  if (/\b(url|uri|href|target|endpoint)\b/i.test(callTarget) && /\b(req\.|request\.|params\.|query\.|body\.|input\.|callback|webhook)\b/i.test(window)) return true;
+  return false;
+}
+
 function readQueryPatternForLine(line) {
   const patterns = [
     /\b(await\s+)?[\w.$]+\.(findMany|findFirst|findUnique|findOne|find|findAll|count|aggregate|groupBy|where|select|get|all|one|first|query)\s*\(/,
@@ -981,7 +1006,7 @@ function writeQueryPatternForText(text) {
 
 function scanNPlusOne(repo) {
   const findings = [];
-  const loopPattern = /\b(for|foreach|while|each)\b|\.(forEach|map|reduce|collect)\s*\(/;
+  const loopPattern = /\b(for|foreach|while|each)\b|\.(forEach|map|flatMap|collect)\s*\(/;
   const sequentialAwaitPattern = /\b(await|for\s+await)\b/;
 
   function scopedWindow(lines, index) {
@@ -1021,7 +1046,7 @@ function scanNPlusOne(repo) {
       const signature = `${file}:${line}:${window.replace(/\s+/g, " ").slice(0, 180)}`;
       if (seen.has(signature)) return;
 
-      if (loopPattern.test(lineText) && hasQueryInWindow) {
+      if (loopPattern.test(lineText) && hasQueryInWindow && hasVariableCardinalityIteration(lineText, window)) {
         seen.add(signature);
         addFinding(
           findings,
@@ -1035,7 +1060,7 @@ function scanNPlusOne(repo) {
         );
       }
 
-      if (/\b(Promise\.all|asyncio\.gather|Task\.WhenAll|errgroup\.Group|join_all)\b/.test(window) && hasQueryInWindow) {
+      if (/\b(Promise\.all|asyncio\.gather|Task\.WhenAll|errgroup\.Group|join_all)\b/.test(window) && hasQueryInWindow && hasVariableCardinalityIteration(lineText, window)) {
         seen.add(signature);
         addFinding(
           findings,
@@ -1346,8 +1371,7 @@ function scanWebAndRuntimeSecurity(repo) {
         );
       }
 
-      if (/\bredirect\s*\(|res\.redirect|router\.push|navigate\s*\(|window\.location|location\.href/.test(lineText)
-        && /\b(req\.|request\.|params|query|body|next|url|redirect|returnTo|callback)\b/.test(window)
+      if (hasUserControlledRedirectTarget(lineText, window)
         && !/\b(allowlist|whitelist|safeRedirect|validateRedirect|sameOrigin|new URL\(|URLPattern)\b/i.test(window)) {
         addFinding(
           findings,
@@ -1361,8 +1385,7 @@ function scanWebAndRuntimeSecurity(repo) {
         );
       }
 
-      if (/\b(fetch|axios|request|http\.get|http\.request|urllib|requests\.get|Net::HTTP|Faraday)\s*\(/.test(lineText)
-        && /\b(req\.|request\.|params|query|body|input|url|uri|callback|webhook)\b/.test(window)
+      if (hasUserControlledFetchTarget(lineText, window)
         && !/\b(allowlist|whitelist|validateUrl|safeUrl|blockPrivate|isPrivateIp|URLPattern|sameOrigin)\b/i.test(window)) {
         addFinding(
           findings,
@@ -1861,7 +1884,7 @@ function scanFrameworkSpecific(repo) {
       addFinding(
         findings,
         "nestjs-controller-direct-data-access",
-        "medium",
+        "low",
         repo.name,
         file,
         lineForFirstOccurrence(text, "PrismaService") !== "-" ? lineForFirstOccurrence(text, "PrismaService") : lineForFirstOccurrence(text, "Repository"),
@@ -2686,7 +2709,7 @@ function scanPublicContractIntegrity(repo) {
 function scanConfigValidationIntegrity(repo) {
   const findings = [];
   const configurableFieldPattern = /(color|colour|gradient|radius|width|height|size|spacing|opacity|shadow|blur|image|url|uri|icon|style|effect|transition|theme|appearance|branding|background|foreground|border|font|token|variant|mode|type|kind|status|role|permission|provider|scope|locale|timezone|currency)/i;
-  const strongValidatorPattern = /@(IsEnum|IsIn|Matches|IsHexColor|IsUrl|IsUUID|IsBoolean|IsNumber|IsInt|Min|Max|Length|MinLength|MaxLength|Validate|ValidateIf)|z\.enum|z\.nativeEnum|z\.literal|z\.union|yup\.(mixed|number|boolean)|Joi\.(valid|allow|number|boolean)|\.(regex|url|uuid|email|min|max|int|positive|nonnegative)\s*\(|oneOf|enum:|\ballowed[A-Za-z0-9_]*\b|\bnormalizeEnum\b|\bvalidate[A-Za-z0-9_]*Token\b/i;
+  const strongValidatorPattern = /@(IsEnum|IsIn|Matches|IsHexColor|IsUrl|IsUUID|IsBoolean|IsNumber|IsInt|Min|Max|Length|MinLength|MaxLength|Validate|ValidateIf)|z\.enum|z\.nativeEnum|z\.literal|z\.union|yup\.(mixed|number|boolean)|Joi\.(valid|allow|number|boolean)|\.(regex|url|uuid|email|datetime|min|max|int|positive|nonnegative)\s*\(|oneOf|enum:|\ballowed[A-Za-z0-9_]*\b|\bnormalizeEnum\b|\bvalidate[A-Za-z0-9_]*Token\b/i;
 
   for (const file of existingFiles(repo.root, repo.entries).filter((value) => isCode(value) && !isTest(value))) {
     if (changedLineCount(repo, file) === 0) continue;
@@ -2710,7 +2733,7 @@ function scanConfigValidationIntegrity(repo) {
       addFinding(
         findings,
         "config-token-weak-string-validation",
-        "medium",
+        "low",
         repo.name,
         file,
         line,
